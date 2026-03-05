@@ -58,6 +58,7 @@ anyhow = "1.0.102"
 csv = "1"
 zip = "2"
 strum = { version = "0.26", features = ["derive"] }
+tempfile = "3.26.0"
 
 [dev-dependencies]
 test-case = "3.3.1"
