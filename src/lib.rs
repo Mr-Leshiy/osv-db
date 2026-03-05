@@ -7,7 +7,6 @@ use std::{
 };
 
 use anyhow::Context;
-
 use chrono::{DateTime, Utc};
 
 use crate::{
@@ -73,11 +72,11 @@ impl OsvDb {
     /// Downloads only the records that have been modified since [`Self::last_modified`]
     /// and updates the local database files accordingly.
     ///
-    /// Fetches the `modified_id.csv` index for the configured ecosystem (or all ecosystems
-    /// if [`None`]). The file is sorted in reverse chronological order, so parsing stops
-    /// as soon as a timestamp at or before [`Self::last_modified`] is encountered,
-    /// avoiding a full re-download. After all new records are saved, [`Self::last_modified`]
-    /// is updated to the highest timestamp seen.
+    /// Fetches the `modified_id.csv` index for the configured ecosystem (or all
+    /// ecosystems if [`None`]). The file is sorted in reverse chronological order, so
+    /// parsing stops as soon as a timestamp at or before [`Self::last_modified`] is
+    /// encountered, avoiding a full re-download. After all new records are saved,
+    /// [`Self::last_modified`] is updated to the highest timestamp seen.
     pub async fn update(&mut self) -> anyhow::Result<()> {
         let client = reqwest::Client::new();
 
@@ -151,8 +150,8 @@ async fn download_and_extract_osv_archive(
 /// Scans all `.json` files in `path`, deserializes them as [`OsvRecord`]s, and returns
 /// the maximum [`OsvRecord::modified`] timestamp found across all records.
 ///
-/// Must be called after the OSV archive has already been downloaded and extracted into `path`
-/// (i.e. after [`download_and_extract_osv_archive`] has completed successfully).
+/// Must be called after the OSV archive has already been downloaded and extracted into
+/// `path` (i.e. after [`download_and_extract_osv_archive`] has completed successfully).
 fn index(path: impl AsRef<Path>) -> anyhow::Result<DateTime<Utc>> {
     std::fs::read_dir(path.as_ref())
         .context("failed to read database directory")?
@@ -166,8 +165,8 @@ fn index(path: impl AsRef<Path>) -> anyhow::Result<DateTime<Utc>> {
             }
         })
         .try_fold(DateTime::<Utc>::MIN_UTC, |max, path| {
-            let file = File::open(&path)
-                .with_context(|| format!("failed to open {}", path.display()))?;
+            let file =
+                File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
             let record: OsvRecord = serde_json::from_reader(file)
                 .with_context(|| format!("failed to deserialize {}", path.display()))?;
             Ok(max.max(record.modified))
@@ -190,7 +189,10 @@ fn modified_id_csv_url(ecosystem: Option<&Ecosystem>) -> String {
     }
 }
 
-fn osv_record_url(ecosystem: Option<&Ecosystem>, record_path: &str) -> String {
+fn osv_record_url(
+    ecosystem: Option<&Ecosystem>,
+    record_path: &str,
+) -> String {
     match ecosystem {
         Some(ecosystem) => format!("{OSV_STORAGE_URL}/{ecosystem}/{record_path}.json"),
         None => format!("{OSV_STORAGE_URL}/{record_path}.json"),

@@ -21,7 +21,11 @@ impl TryFrom<csv::StringRecord> for OsvModifiedRecord {
     type Error = anyhow::Error;
 
     fn try_from(record: csv::StringRecord) -> Result<Self, Self::Error> {
-        anyhow::ensure!(record.len() == 2, "expected 2 columns, got {}", record.len());
+        anyhow::ensure!(
+            record.len() == 2,
+            "expected 2 columns, got {}",
+            record.len()
+        );
 
         let timestamp_str = record.get(0).context("missing timestamp column")?;
         let path = record.get(1).context("missing path column")?;
@@ -36,7 +40,7 @@ impl TryFrom<csv::StringRecord> for OsvModifiedRecord {
                     .parse::<Ecosystem>()
                     .with_context(|| format!("unknown ecosystem: {eco_str}"))?;
                 (Some(ecosystem), id_str.to_string())
-            }
+            },
             None => (None, path.to_string()),
         };
 
