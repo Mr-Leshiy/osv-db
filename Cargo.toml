@@ -1,0 +1,64 @@
+[package]
+name = "osv-db"
+version = "0.1.0"
+edition = "2024"
+authors = [
+    "Oleksii Pozhylenkov (Mr-Leshiy) <leshiy12345678@gmail.com>"
+]
+license = "Apache-2.0"
+
+[lints.rust]
+unexpected_cfgs = { level = "warn", check-cfg = ['cfg(track_caller)'] }
+warnings = "deny"
+missing_docs = "allow"
+let_underscore_drop = "deny"
+non_ascii_idents = "deny"
+single_use_lifetimes = "deny"
+trivial_casts = "deny"
+trivial_numeric_casts = "deny"
+
+[lints.rustdoc]
+broken_intra_doc_links = "deny"
+invalid_codeblock_attributes = "deny"
+invalid_html_tags = "deny"
+invalid_rust_codeblocks = "deny"
+bare_urls = "deny"
+unescaped_backticks = "deny"
+
+[lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"
+todo = "deny"
+unimplemented = "deny"
+exit = "deny"
+get_unwrap = "deny"
+index_refutable_slice = "deny"
+indexing_slicing = "deny"
+match_wild_err_arm = "deny"
+missing_panics_doc = "deny"
+panic = "deny"
+string_slice = "deny"
+unchecked_time_subtraction = "deny"
+unreachable = "deny"
+missing_docs_in_private_items = "allow"
+arithmetic_side_effects = "deny"
+missing_errors_doc = "allow"
+
+[dependencies]
+tokio = { version = "1.48.0", features = ["macros", "sync", "rt-multi-thread"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+reqwest = "0.13.2"
+bytes = "1.11.1"
+
+chrono = { version = "0.4.44", features = ["serde"] }
+
+anyhow = "1.0.102"
+csv = "1"
+zip = "2"
+strum = { version = "0.26", features = ["derive"] }
+
+[dev-dependencies]
+test-case = "3.3.1"
+tempdir = "0.3.7"
