@@ -27,5 +27,5 @@ jobs:
       - name: Deny
         uses: EmbarkStudios/cargo-deny-action@v2
       - name: Unit tests
-        run: cargo test --target
+        run: cargo test
 
