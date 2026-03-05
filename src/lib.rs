@@ -29,7 +29,7 @@ impl OsvDb {
     /// Initializes an OSV database for the provided [`Ecosystem`].
     /// If provided ecosystem is [`None`], initialise for all ecosystems.
     /// - Downloads the latest archive from <https://storage.googleapis.com/osv-vulnerabilities>
-    /// - Unfolds it to the provided [`path`]
+    /// - Unfolds it to the provided `path`
     pub async fn init(
         ecosystem: Option<Ecosystem>,
         path: impl AsRef<Path>,

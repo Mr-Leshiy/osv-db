@@ -7,7 +7,7 @@ pub struct Range {
     /// The versioning scheme used for [`Range::events`].
     #[serde(rename = "type")]
     pub range_type: RangeType,
-    /// Repository URL — required when `range_type` is [`RangeType::Git`].
+    /// Repository URL — required when `range_type` is [`RangeType::GIT`].
     pub repo: Option<String>,
     /// Ordered list of version events that define the affected range.
     ///
