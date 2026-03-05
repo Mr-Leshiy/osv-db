@@ -45,6 +45,10 @@ impl OsvDb {
         })
     }
 
+    fn records_path(&self) -> PathBuf {
+        self.location.join(RECORDS_DIRECTORY)
+    }
+
     /// Downloads a full, latest OSV database for the provided [`Ecosystem`].
     /// If provided ecosystem is [`None`], initialise for all ecosystems.
     /// - Downloads the latest archive into a temporary subdirectory of `location`
@@ -67,21 +71,12 @@ impl OsvDb {
         download_and_extract_osv_archive(self.ecosystem.as_ref(), &tmp_dir).await?;
 
         // cleans up the current state
-        let records_dir = self.location.join(RECORDS_DIRECTORY);
+        let records_dir = self.records_path();
         if records_dir.exists() {
             std::fs::remove_dir_all(&records_dir)?;
         }
         // replace it with the latest one
-        std::fs::rename(tmp_dir, &records_dir)?;
-
-        // for entry in std::fs::read_dir(&tmp_dir)
-        //     .with_context(|| format!("failed to read temp dir {}", tmp_dir.display()))?
-        // {
-        //     let entry = entry?;
-        //     std::fs::rename(entry.path(), self.location.join(entry.file_name()))?;
-        // }
-        // std::fs::remove_dir(&tmp_dir)
-        //     .with_context(|| format!("failed to remove temp dir {}", tmp_dir.display()))?;
+        std::fs::rename(&tmp_dir, &records_dir)?;
 
         self.last_modified = last_modified(&records_dir)?;
         Ok(())
@@ -97,7 +92,7 @@ impl OsvDb {
         &self,
         id: &OsvRecordId,
     ) -> anyhow::Result<Option<OsvRecord>> {
-        let records_dir = self.location.join(RECORDS_DIRECTORY);
+        let records_dir = self.records_path();
         let mut record_path = records_dir.join(id);
         record_path.add_extension(OSV_RECORD_FILE_EXTENSION);
         if !record_path.exists() {
@@ -228,10 +223,10 @@ mod tests {
         let mut osv = OsvDb::new(Some(ecosystem), "./osv").unwrap();
         osv.download_latest().await.unwrap();
 
-        // assert!(
-        //     osv.get_record(&"RUSTSEC-2024-0401".to_string())
-        //         .unwrap()
-        //         .is_some()
-        // );
+        assert!(
+            osv.get_record(&"RUSTSEC-2024-0401".to_string())
+                .unwrap()
+                .is_some()
+        );
     }
 }
