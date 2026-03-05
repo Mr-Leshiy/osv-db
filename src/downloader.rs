@@ -88,6 +88,7 @@ async fn download_chunked(
     // Pre-allocate the file so every offset is a valid write position
     let mut file = OpenOptions::new()
         .create(true)
+        .truncate(true)
         .write(true)
         .read(true)
         .open(path)?;
@@ -111,6 +112,7 @@ pub async fn simple_download_to(
 ) -> anyhow::Result<File> {
     let mut file = OpenOptions::new()
         .create(true)
+        .truncate(true)
         .write(true)
         .read(true)
         .open(path)?;

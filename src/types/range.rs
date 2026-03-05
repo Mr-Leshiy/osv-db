@@ -24,7 +24,7 @@ pub enum RangeType {
     GIT,
     /// Semantic versioning (<https://semver.org/>).
     SEMVER,
-    /// Ecosystem-specific versioning (e.g. Maven, PyPI).
+    /// Ecosystem-specific versioning (e.g. Maven, `PyPI`).
     ECOSYSTEM,
 }
 

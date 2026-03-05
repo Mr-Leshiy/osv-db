@@ -8,7 +8,7 @@ use strum::{Display, EnumString};
 pub struct EcosystemWithSuffix(Ecosystem, Option<String>);
 
 /// Represents an OSV ecosystem, as defined by the OSV schema.
-/// See: https://github.com/ossf/osv-schema/blob/main/validation/schema.json
+/// See <https://github.com/ossf/osv-schema/blob/main/validation/schema.json>
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Display, EnumString)]
 pub enum Ecosystem {
     #[strum(to_string = "AlmaLinux")]
@@ -204,6 +204,7 @@ mod tests {
     #[test_case("VSCode", Ecosystem::VSCode)]
     #[test_case("Wolfi", Ecosystem::Wolfi)]
     #[test_case("GIT", Ecosystem::Git)]
+    #[allow(clippy::needless_pass_by_value)]
     fn display_and_parse_roundtrip(
         osv_string: &str,
         expected: Ecosystem,
