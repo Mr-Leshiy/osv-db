@@ -201,7 +201,7 @@ fn osv_record_url(
 
 #[cfg(test)]
 mod tests {
-    use tempdir::TempDir;
+    use tempfile::TempDir;
     use test_case::test_case;
 
     use super::*;
@@ -209,7 +209,7 @@ mod tests {
     #[test_case(Ecosystem::CratesIo)]
     #[tokio::test]
     async fn osv_db_init_test(ecosystem: Ecosystem) {
-        let tmp = TempDir::new("osv_downloader").unwrap();
+        let tmp = TempDir::new().unwrap();
         let osv = OsvDb::init(Some(ecosystem), tmp.path()).await.unwrap();
 
         assert!(
