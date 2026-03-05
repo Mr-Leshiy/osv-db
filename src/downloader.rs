@@ -88,6 +88,7 @@ async fn download_chunked(
     // Pre-allocate the file so every offset is a valid write position
     let mut file = OpenOptions::new()
         .create(true)
+        .truncate(true)
         .write(true)
         .read(true)
         .open(path)?;
@@ -111,6 +112,7 @@ pub async fn simple_download_to(
 ) -> anyhow::Result<File> {
     let mut file = OpenOptions::new()
         .create(true)
+        .truncate(true)
         .write(true)
         .read(true)
         .open(path)?;
@@ -123,7 +125,7 @@ pub async fn simple_download_to(
 mod tests {
     use std::io::{Read, Seek, SeekFrom};
 
-    use tempdir::TempDir;
+    use tempfile::TempDir;
 
     use super::*;
 
@@ -135,7 +137,7 @@ mod tests {
         const N: u64 = 1024;
         let expected: Vec<u8> = (0..N).map(|i| b'a' + (i % 26) as u8).collect();
 
-        let tmp = TempDir::new("osv_downloader").unwrap();
+        let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("output");
         let client = reqwest::Client::new();
         let mut file = chuncked_download_to(
@@ -158,7 +160,7 @@ mod tests {
     /// `SGVsbG8gV29ybGQ=` decodes to `Hello World`.
     #[tokio::test]
     async fn simple_download_to_test() {
-        let tmp = TempDir::new("osv_downloader").unwrap();
+        let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("output");
         let client = reqwest::Client::new();
         let mut file =

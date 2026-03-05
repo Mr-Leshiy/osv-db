@@ -8,10 +8,10 @@ mod reference;
 mod severity;
 
 pub use affected::Affected;
-pub use modified_record::OsvModifiedRecord;
 use chrono::{DateTime, Utc};
 pub use credit::{Credit, CreditType};
 pub use ecosystem::{Ecosystem, EcosystemWithSuffix};
+pub use modified_record::OsvModifiedRecord;
 pub use package::Package;
 pub use range::{Event, Range, RangeType};
 pub use reference::{Reference, ReferenceType};

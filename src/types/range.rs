@@ -7,7 +7,7 @@ pub struct Range {
     /// The versioning scheme used for [`Range::events`].
     #[serde(rename = "type")]
     pub range_type: RangeType,
-    /// Repository URL — required when `range_type` is [`RangeType::Git`].
+    /// Repository URL — required when `range_type` is [`RangeType::GIT`].
     pub repo: Option<String>,
     /// Ordered list of version events that define the affected range.
     ///
@@ -24,7 +24,7 @@ pub enum RangeType {
     GIT,
     /// Semantic versioning (<https://semver.org/>).
     SEMVER,
-    /// Ecosystem-specific versioning (e.g. Maven, PyPI).
+    /// Ecosystem-specific versioning (e.g. Maven, `PyPI`).
     ECOSYSTEM,
 }
 
