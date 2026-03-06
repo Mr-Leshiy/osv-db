@@ -23,10 +23,10 @@ const OSV_RECORD_FILE_EXTENSION: &str = "json";
 const RECORDS_DIRECTORY: &str = "records";
 
 #[derive(Debug, Clone)]
-pub struct OsvDb(Arc<RwLock<OsbDbInner>>);
+pub struct OsvDb(Arc<RwLock<OsvDbInner>>);
 
 #[derive(Debug)]
-struct OsbDbInner {
+struct OsvDbInner {
     /// On disk location of the OSV data
     location: PathBuf,
     /// Ecosystem this database was initialised for, or [`None`] for all ecosystems
@@ -45,46 +45,23 @@ impl OsvDb {
             "Provided `path` {} must be a directory",
             path.as_ref().display()
         );
-        Ok(Self(Arc::new(RwLock::new(OsbDbInner {
+        Ok(Self(Arc::new(RwLock::new(OsvDbInner {
             location: path.as_ref().to_path_buf(),
             ecosystem,
             last_modified: DateTime::<Utc>::MIN_UTC,
         }))))
     }
 
-    fn read_inner(&self) -> RwLockReadGuard<'_, OsbDbInner> {
+    fn read_inner(&self) -> RwLockReadGuard<'_, OsvDbInner> {
         let inner = self.0.read();
         // dont care about poisoning, get the recovered value
         inner.unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
-    fn write_inner(&self) -> RwLockWriteGuard<'_, OsbDbInner> {
+    fn write_inner(&self) -> RwLockWriteGuard<'_, OsvDbInner> {
         let inner = self.0.write();
         // dont care about poisoning, get the recovered value
         inner.unwrap_or_else(std::sync::PoisonError::into_inner)
-    }
-
-    /// Returns the on disk location of the database
-    #[must_use]
-    pub fn location(&self) -> PathBuf {
-        self.read_inner().location.clone()
-    }
-
-    fn records_path(&self) -> PathBuf {
-        self.location().join(RECORDS_DIRECTORY)
-    }
-
-    fn tmp_dir(
-        &self,
-        prefix: &str,
-    ) -> PathBuf {
-        let tmp_name = format!(
-            ".tmp-{prefix}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        );
-        self.location().join(tmp_name)
     }
 
     /// Downloads a full, latest OSV database for the provided [`Ecosystem`].
@@ -95,23 +72,26 @@ impl OsvDb {
     ///   updates `self.last_modified` field with the maximum [`OsvRecord::modified`]
     ///   timestamp found across all records.
     pub async fn download_latest(&self) -> anyhow::Result<()> {
-        let tmp_dir = self.tmp_dir("osv-download");
+        let read_inner = self.read_inner();
+        let tmp_dir = read_inner.tmp_dir("osv-download");
         std::fs::create_dir(&tmp_dir)
             .with_context(|| format!("failed to create temp dir {}", tmp_dir.display()))?;
 
-        let ecosystem = self.read_inner().ecosystem;
-        download_and_extract_osv_archive(ecosystem.as_ref(), &tmp_dir).await?;
 
-        let mut inner = self.write_inner();
-        // cleans up the current state
-        let records_dir = self.records_path();
+        download_and_extract_osv_archive(read_inner.ecosystem.as_ref(), &tmp_dir).await?;
+        // release read lock
+        drop(read_inner);
+        
+        let mut write_inner = self.write_inner();
+        // cleans up the current state if its exitsts
+        let records_dir = write_inner.records_path();
         if records_dir.exists() {
             std::fs::remove_dir_all(&records_dir)?;
         }
         // replace it with the latest one
         std::fs::rename(&tmp_dir, &records_dir)?;
 
-        inner.last_modified = last_modified(&records_dir)?;
+        write_inner.last_modified = last_modified(&records_dir)?;
         Ok(())
     }
 
@@ -119,15 +99,8 @@ impl OsvDb {
         &self,
         id: &OsvRecordId,
     ) -> anyhow::Result<Option<OsvRecord>> {
-        let records_dir = self.records_path();
-        let mut record_path = records_dir.join(id);
-        record_path.add_extension(OSV_RECORD_FILE_EXTENSION);
-        if !record_path.exists() {
-            return Ok(None);
-        }
-        let osv_record_file = File::open(record_path)?;
-        let osv_record = serde_json::from_reader(&osv_record_file)?;
-        Ok(Some(osv_record))
+        let read_inner = self.read_inner();
+        read_inner.get_record(id)
     }
 
     // /// Sync with the latest OSV data, downloads only the records that have been modified
@@ -179,6 +152,47 @@ impl OsvDb {
     //     self.0.last_modified = new_last_modified;
     //     Ok(())
     // }
+}
+
+impl OsvDbInner {
+        /// Returns the on disk location of the database
+    #[must_use]
+    pub fn location(&self) -> &Path {
+        &self.location
+    }
+
+    fn records_path(&self) -> PathBuf {
+        self.location().join(RECORDS_DIRECTORY)
+    }
+
+    fn tmp_dir(
+        &self,
+        prefix: &str,
+    ) -> PathBuf {
+        let tmp_name = format!(
+            ".tmp-{prefix}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        );
+        self.location().join(tmp_name)
+    }
+
+    fn get_record(
+        &self,
+        id: &OsvRecordId,
+    ) -> anyhow::Result<Option<OsvRecord>> {
+        let records_dir = self.records_path();
+        let mut record_path = records_dir.join(id);
+        record_path.add_extension(OSV_RECORD_FILE_EXTENSION);
+        if !record_path.exists() {
+            return Ok(None);
+        }
+        let osv_record_file = File::open(record_path)?;
+        let osv_record = serde_json::from_reader(&osv_record_file)?;
+        Ok(Some(osv_record))
+    }
+    
 }
 
 /// Downloads the OSV archive for the given [`Ecosystem`] (or all ecosystems if [`None`])
@@ -247,8 +261,8 @@ mod tests {
     #[test_case(Ecosystem::CratesIo)]
     #[tokio::test]
     async fn osv_db_download_latest_test(ecosystem: Ecosystem) {
-        let _tmp = TempDir::new().unwrap();
-        let osv = OsvDb::new(Some(ecosystem), "./osv").unwrap();
+        let tmp = TempDir::new().unwrap();
+        let osv = OsvDb::new(Some(ecosystem), tmp.path()).unwrap();
         osv.download_latest().await.unwrap();
 
         assert!(
