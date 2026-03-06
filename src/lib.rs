@@ -80,7 +80,7 @@ impl OsvDb {
             .with_context(|| format!("failed to create temp dir {}", tmp_dir.display()))?;
 
         download_and_extract_osv_archive(ecosystem.as_ref(), &tmp_dir).await?;
-        
+
         let mut write_inner = self.write_inner();
         // cleans up the current state if its exitsts
         let records_dir = write_inner.records_path();
@@ -154,7 +154,7 @@ impl OsvDb {
 }
 
 impl OsvDbInner {
-        /// Returns the on disk location of the database
+    /// Returns the on disk location of the database
     #[must_use]
     pub fn location(&self) -> &Path {
         &self.location
@@ -191,7 +191,6 @@ impl OsvDbInner {
         let osv_record = serde_json::from_reader(&osv_record_file)?;
         Ok(Some(osv_record))
     }
-    
 }
 
 /// Downloads the OSV archive for the given [`Ecosystem`] (or all ecosystems if [`None`])
