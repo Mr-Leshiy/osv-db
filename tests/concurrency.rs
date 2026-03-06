@@ -8,8 +8,6 @@
 //! are mutually exclusive — a reader can never observe a partially-replaced or
 //! missing directory.
 
-#![allow(clippy::unwrap_used, clippy::arithmetic_side_effects)]
-
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},

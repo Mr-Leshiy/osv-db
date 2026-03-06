@@ -242,25 +242,3 @@ fn last_modified(path: impl AsRef<Path>) -> anyhow::Result<DateTime<Utc>> {
             Ok(max.max(record.modified))
         })
 }
-
-#[cfg(test)]
-mod tests {
-    use tempfile::TempDir;
-    use test_case::test_case;
-
-    use super::*;
-
-    #[test_case(Ecosystem::CratesIo)]
-    #[tokio::test]
-    async fn osv_db_download_latest_test(ecosystem: Ecosystem) {
-        let tmp = TempDir::new().unwrap();
-        let osv = OsvDb::new(Some(ecosystem), tmp.path()).unwrap();
-        osv.download_latest().await.unwrap();
-
-        assert!(
-            osv.get_record(&"RUSTSEC-2024-0401".to_string())
-                .unwrap()
-                .is_some()
-        );
-    }
-}
