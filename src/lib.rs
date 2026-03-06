@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 mod downloader;
 mod osv_gs;
 pub mod types;
@@ -5,21 +7,26 @@ pub mod types;
 use std::{
     fs::File,
     path::{Path, PathBuf},
+    sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 
 use crate::{
-    downloader::{chuncked_download_to, simple_download_to},
-    osv_gs::{osv_archive_url, osv_modified_id_csv_url, osv_record_url},
-    types::{Ecosystem, OsvModifiedRecord, OsvRecord, OsvRecordId},
+    downloader::chuncked_download_to,
+    osv_gs::osv_archive_url,
+    types::{Ecosystem, OsvRecord, OsvRecordId},
 };
 
 const OSV_RECORD_FILE_EXTENSION: &str = "json";
 const RECORDS_DIRECTORY: &str = "records";
 
-pub struct OsvDb {
+#[derive(Debug, Clone)]
+pub struct OsvDb(Arc<RwLock<OsbDbInner>>);
+
+#[derive(Debug)]
+struct OsbDbInner {
     /// On disk location of the OSV data
     location: PathBuf,
     /// Ecosystem this database was initialised for, or [`None`] for all ecosystems
@@ -38,15 +45,46 @@ impl OsvDb {
             "Provided `path` {} must be a directory",
             path.as_ref().display()
         );
-        Ok(Self {
+        Ok(Self(Arc::new(RwLock::new(OsbDbInner {
             location: path.as_ref().to_path_buf(),
             ecosystem,
             last_modified: DateTime::<Utc>::MIN_UTC,
-        })
+        }))))
+    }
+
+    fn read_inner(&self) -> RwLockReadGuard<'_, OsbDbInner> {
+        let inner = self.0.read();
+        // dont care about poisoning, get the recovered value
+        inner.unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn write_inner(&self) -> RwLockWriteGuard<'_, OsbDbInner> {
+        let inner = self.0.write();
+        // dont care about poisoning, get the recovered value
+        inner.unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Returns the on disk location of the database
+    #[must_use]
+    pub fn location(&self) -> PathBuf {
+        self.read_inner().location.clone()
     }
 
     fn records_path(&self) -> PathBuf {
-        self.location.join(RECORDS_DIRECTORY)
+        self.location().join(RECORDS_DIRECTORY)
+    }
+
+    fn tmp_dir(
+        &self,
+        prefix: &str,
+    ) -> PathBuf {
+        let tmp_name = format!(
+            ".tmp-{prefix}-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_nanos())
+        );
+        self.location().join(tmp_name)
     }
 
     /// Downloads a full, latest OSV database for the provided [`Ecosystem`].
@@ -56,20 +94,15 @@ impl OsvDb {
     /// - Scans all `.json` files in `location`, deserializes them as [`OsvRecord`]s, and
     ///   updates `self.last_modified` field with the maximum [`OsvRecord::modified`]
     ///   timestamp found across all records.
-    pub async fn download_latest(&mut self) -> anyhow::Result<()> {
-        let tmp_name = format!(
-            ".tmp_{}_{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        );
-        let tmp_dir = self.location.join(&tmp_name);
+    pub async fn download_latest(&self) -> anyhow::Result<()> {
+        let tmp_dir = self.tmp_dir("osv-download");
         std::fs::create_dir(&tmp_dir)
             .with_context(|| format!("failed to create temp dir {}", tmp_dir.display()))?;
 
-        download_and_extract_osv_archive(self.ecosystem.as_ref(), &tmp_dir).await?;
+        let ecosystem = self.read_inner().ecosystem;
+        download_and_extract_osv_archive(ecosystem.as_ref(), &tmp_dir).await?;
 
+        let mut inner = self.write_inner();
         // cleans up the current state
         let records_dir = self.records_path();
         if records_dir.exists() {
@@ -78,14 +111,8 @@ impl OsvDb {
         // replace it with the latest one
         std::fs::rename(&tmp_dir, &records_dir)?;
 
-        self.last_modified = last_modified(&records_dir)?;
+        inner.last_modified = last_modified(&records_dir)?;
         Ok(())
-    }
-
-    /// Returns the on disk location of the database
-    #[must_use]
-    pub fn location(&self) -> &Path {
-        &self.location
     }
 
     pub fn get_record(
@@ -103,54 +130,55 @@ impl OsvDb {
         Ok(Some(osv_record))
     }
 
-    /// Sync with the latest OSV data, downloads only the records that have been modified
-    /// since [`Self::last_modified`] and updates the local database files
-    /// accordingly.
-    ///
-    /// Fetches the `modified_id.csv` index for the configured ecosystem (or all
-    /// ecosystems if [`None`]). The file is sorted in reverse chronological order, so
-    /// parsing stops as soon as a timestamp at or before [`Self::last_modified`] is
-    /// encountered, avoiding a full re-download. After all new records are saved,
-    /// [`Self::last_modified`] is updated to the highest timestamp seen.
-    pub async fn sync(&mut self) -> anyhow::Result<()> {
-        let client = reqwest::Client::new();
+    // /// Sync with the latest OSV data, downloads only the records that have been modified
+    // /// since [`Self::last_modified`] and updates the local database files
+    // /// accordingly.
+    // ///
+    // /// Fetches the `modified_id.csv` index for the configured ecosystem (or all
+    // /// ecosystems if [`None`]). The file is sorted in reverse chronological order, so
+    // /// parsing stops as soon as a timestamp at or before [`Self::last_modified`] is
+    // /// encountered, avoiding a full re-download. After all new records are saved,
+    // /// [`Self::last_modified`] is updated to the highest timestamp seen.
+    // pub async fn sync(&mut self) -> anyhow::Result<()> {
+    //     let client = reqwest::Client::new();
 
-        let csv_text = client
-            .get(osv_modified_id_csv_url(self.ecosystem.as_ref()))
-            .send()
-            .await?
-            .text()
-            .await?;
+    //     let csv_text = client
+    //         .get(osv_modified_id_csv_url(self.0.ecosystem.as_ref()))
+    //         .send()
+    //         .await?
+    //         .text()
+    //         .await?;
 
-        let mut new_last_modified = self.last_modified;
+    //     let mut new_last_modified = self.0.last_modified;
 
-        let mut rdr = csv::ReaderBuilder::new()
-            .has_headers(false)
-            .from_reader(csv_text.as_bytes());
+    //     let mut rdr = csv::ReaderBuilder::new()
+    //         .has_headers(false)
+    //         .from_reader(csv_text.as_bytes());
 
-        for result in rdr.records() {
-            let entry = OsvModifiedRecord::try_from_csv_record(&result?, self.ecosystem)?;
+    //     for result in rdr.records() {
+    //         let entry = OsvModifiedRecord::try_from_csv_record(&result?,
+    // self.0.ecosystem)?;
 
-            if entry.modified <= self.last_modified {
-                break;
-            }
+    //         if entry.modified <= self.0.last_modified {
+    //             break;
+    //         }
 
-            new_last_modified = new_last_modified.max(entry.modified);
+    //         new_last_modified = new_last_modified.max(entry.modified);
 
-            let mut record_path = self.location.join(&entry.id);
-            record_path.add_extension(OSV_RECORD_FILE_EXTENSION);
+    //         let mut record_path = self.0.location.join(&entry.id);
+    //         record_path.add_extension(OSV_RECORD_FILE_EXTENSION);
 
-            simple_download_to(
-                &client,
-                &osv_record_url(self.ecosystem.as_ref(), &entry.id),
-                record_path,
-            )
-            .await?;
-        }
+    //         simple_download_to(
+    //             &client,
+    //             &osv_record_url(self.0.ecosystem.as_ref(), &entry.id),
+    //             record_path,
+    //         )
+    //         .await?;
+    //     }
 
-        self.last_modified = new_last_modified;
-        Ok(())
-    }
+    //     self.0.last_modified = new_last_modified;
+    //     Ok(())
+    // }
 }
 
 /// Downloads the OSV archive for the given [`Ecosystem`] (or all ecosystems if [`None`])
@@ -220,7 +248,7 @@ mod tests {
     #[tokio::test]
     async fn osv_db_download_latest_test(ecosystem: Ecosystem) {
         let _tmp = TempDir::new().unwrap();
-        let mut osv = OsvDb::new(Some(ecosystem), "./osv").unwrap();
+        let osv = OsvDb::new(Some(ecosystem), "./osv").unwrap();
         osv.download_latest().await.unwrap();
 
         assert!(
