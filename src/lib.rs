@@ -72,15 +72,14 @@ impl OsvDb {
     ///   updates `self.last_modified` field with the maximum [`OsvRecord::modified`]
     ///   timestamp found across all records.
     pub async fn download_latest(&self) -> anyhow::Result<()> {
-        let read_inner = self.read_inner();
-        let tmp_dir = read_inner.tmp_dir("osv-download");
+        let (tmp_dir, ecosystem) = {
+            let read_inner = self.read_inner();
+            (read_inner.tmp_dir("osv-download"), read_inner.ecosystem)
+        };
         std::fs::create_dir(&tmp_dir)
             .with_context(|| format!("failed to create temp dir {}", tmp_dir.display()))?;
 
-
-        download_and_extract_osv_archive(read_inner.ecosystem.as_ref(), &tmp_dir).await?;
-        // release read lock
-        drop(read_inner);
+        download_and_extract_osv_archive(ecosystem.as_ref(), &tmp_dir).await?;
         
         let mut write_inner = self.write_inner();
         // cleans up the current state if its exitsts
