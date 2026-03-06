@@ -14,9 +14,9 @@ use anyhow::Context;
 use chrono::{DateTime, Utc};
 
 use crate::{
-    downloader::chuncked_download_to,
-    osv_gs::osv_archive_url,
-    types::{Ecosystem, OsvRecord, OsvRecordId},
+    downloader::{chuncked_download_to, simple_download_to},
+    osv_gs::{osv_archive_url, osv_modified_id_csv_url, osv_record_url},
+    types::{Ecosystem, OsvModifiedRecord, OsvRecord, OsvRecordId},
 };
 
 const OSV_RECORD_FILE_EXTENSION: &str = "json";
@@ -100,55 +100,59 @@ impl OsvDb {
         read_inner.get_record(id)
     }
 
-    // /// Sync with the latest OSV data, downloads only the records that have been modified
-    // /// since [`Self::last_modified`] and updates the local database files
-    // /// accordingly.
-    // ///
-    // /// Fetches the `modified_id.csv` index for the configured ecosystem (or all
-    // /// ecosystems if [`None`]). The file is sorted in reverse chronological order, so
-    // /// parsing stops as soon as a timestamp at or before [`Self::last_modified`] is
-    // /// encountered, avoiding a full re-download. After all new records are saved,
-    // /// [`Self::last_modified`] is updated to the highest timestamp seen.
-    // pub async fn sync(&mut self) -> anyhow::Result<()> {
-    //     let client = reqwest::Client::new();
+    /// Sync with the latest OSV data, downloads only the records that have been modified
+    /// since [`Self::last_modified`] and updates the local database files
+    /// accordingly.
+    ///
+    /// Fetches the `modified_id.csv` index for the configured ecosystem (or all
+    /// ecosystems if [`None`]). The file is sorted in reverse chronological order, so
+    /// parsing stops as soon as a timestamp at or before [`Self::last_modified`] is
+    /// encountered, avoiding a full re-download. After all new records are saved,
+    /// [`Self::last_modified`] is updated to the highest timestamp seen.
+    pub async fn sync(&self) -> anyhow::Result<()> {
+        let (ecosystem, last_modified, records_dir) = {
+            let inner = self.read_inner();
+            (inner.ecosystem, inner.last_modified, inner.records_path())
+        };
 
-    //     let csv_text = client
-    //         .get(osv_modified_id_csv_url(self.0.ecosystem.as_ref()))
-    //         .send()
-    //         .await?
-    //         .text()
-    //         .await?;
+        let client = reqwest::Client::new();
 
-    //     let mut new_last_modified = self.0.last_modified;
+        let csv_text = client
+            .get(osv_modified_id_csv_url(ecosystem.as_ref()))
+            .send()
+            .await?
+            .text()
+            .await?;
 
-    //     let mut rdr = csv::ReaderBuilder::new()
-    //         .has_headers(false)
-    //         .from_reader(csv_text.as_bytes());
+        let mut new_last_modified = last_modified;
 
-    //     for result in rdr.records() {
-    //         let entry = OsvModifiedRecord::try_from_csv_record(&result?,
-    // self.0.ecosystem)?;
+        let mut rdr = csv::ReaderBuilder::new()
+            .has_headers(false)
+            .from_reader(csv_text.as_bytes());
 
-    //         if entry.modified <= self.0.last_modified {
-    //             break;
-    //         }
+        for result in rdr.records() {
+            let entry = OsvModifiedRecord::try_from_csv_record(&result?, ecosystem)?;
 
-    //         new_last_modified = new_last_modified.max(entry.modified);
+            if entry.modified <= last_modified {
+                break;
+            }
 
-    //         let mut record_path = self.0.location.join(&entry.id);
-    //         record_path.add_extension(OSV_RECORD_FILE_EXTENSION);
+            new_last_modified = new_last_modified.max(entry.modified);
 
-    //         simple_download_to(
-    //             &client,
-    //             &osv_record_url(self.0.ecosystem.as_ref(), &entry.id),
-    //             record_path,
-    //         )
-    //         .await?;
-    //     }
+            let mut record_path = records_dir.join(&entry.id);
+            record_path.add_extension(OSV_RECORD_FILE_EXTENSION);
 
-    //     self.0.last_modified = new_last_modified;
-    //     Ok(())
-    // }
+            simple_download_to(
+                &client,
+                &osv_record_url(Some(&entry.ecosystem), &entry.id),
+                record_path,
+            )
+            .await?;
+        }
+
+        self.write_inner().last_modified = new_last_modified;
+        Ok(())
+    }
 }
 
 impl OsvDbInner {
@@ -241,4 +245,52 @@ fn last_modified(path: impl AsRef<Path>) -> anyhow::Result<DateTime<Utc>> {
                 .with_context(|| format!("failed to deserialize {}", path.display()))?;
             Ok(max.max(record.modified))
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs::File;
+
+    use chrono::Duration;
+    use tempfile::TempDir;
+
+    use super::*;
+    use crate::types::{Ecosystem, OsvRecord};
+
+    /// Downloads the latest OSV database, reads `RUSTSEC-2024-0401`, removes all
+    /// records modified at or before its `modified` timestamp, then asserts the
+    /// record no longer exists. Then calls sync to re-download it and asserts it
+    /// is present again.
+    #[tokio::test]
+    async fn simple_roundtrip() {
+        let tmp = TempDir::new().unwrap();
+        let osv = OsvDb::new(Some(Ecosystem::CratesIo), tmp.path()).unwrap();
+
+        let record_id = "RUSTSEC-2024-0401".to_string();
+        assert!(osv.get_record(&record_id).unwrap().is_none());
+
+        osv.download_latest().await.unwrap();
+
+        let record = osv.get_record(&record_id).unwrap().unwrap();
+        let cutoff = record.modified;
+
+        let records_dir = tmp.path().join("records");
+        for entry in std::fs::read_dir(&records_dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().and_then(|e| e.to_str()) == Some(OSV_RECORD_FILE_EXTENSION) {
+                let file = File::open(&path).unwrap();
+                let r: OsvRecord = serde_json::from_reader(file).unwrap();
+                if r.modified <= cutoff {
+                    std::fs::remove_file(&path).unwrap();
+                }
+            }
+        }
+
+        assert!(osv.get_record(&record_id).unwrap().is_none());
+
+        osv.write_inner().last_modified = cutoff - Duration::milliseconds(1);
+        osv.sync().await.unwrap();
+
+        assert!(osv.get_record(&record_id).unwrap().is_some());
+    }
 }
