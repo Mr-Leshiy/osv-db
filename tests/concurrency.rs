@@ -1,12 +1,12 @@
-//! Integration test demonstrating the theoretical race between two concurrent
-//! `download_latest` calls and `get_record`.
+//! Integration test verifying that concurrent `download_latest` and `get_record`
+//! calls are safe under the internal `Arc<RwLock<OsvDbInner>>` guard.
 //!
-//! `get_record` acquires the read lock only to obtain the records path, then
-//! **releases it before performing any filesystem I/O**.  Both `download_latest`
-//! calls race to swap the `records/` directory (`remove_dir_all` + `rename`).
-//! A `get_record` that runs between those two operations will observe a missing
-//! directory and return either `Ok(None)` or `Err`, even though the record
-//! exists in the newly downloaded data.
+//! `get_record` holds the **read lock** for the entire duration of its
+//! filesystem I/O (path resolution, existence check, open, deserialize).
+//! `download_latest` holds the **write lock** while atomically swapping the
+//! `records/` directory (`remove_dir_all` + `rename`), so the two operations
+//! are mutually exclusive — a reader can never observe a partially-replaced or
+//! missing directory.
 
 #![allow(clippy::unwrap_used, clippy::arithmetic_side_effects)]
 
@@ -18,15 +18,14 @@ use std::sync::{
 use osv_db::{OsvDb, types::Ecosystem};
 use tempfile::TempDir;
 
-/// Two concurrent `download_latest` calls on clones of the same [`OsvDb`]
-/// (which share the same `Arc<RwLock<…>>` inner) race to swap the `records/`
-/// directory.  A third task continuously calls `get_record` for the entire
-/// duration.
+/// Spawns two concurrent `download_latest` tasks on clones of the same [`OsvDb`]
+/// (sharing the same `Arc<RwLock<…>>` inner), plus a third task that continuously
+/// calls `get_record` for the entire download duration.
 ///
-/// Because `get_record` releases the internal read-guard before any filesystem
-/// I/O, it can land inside the `remove_dir_all` → `rename` window and observe
-/// an absent or partially-replaced `records/` directory, returning `Ok(None)`
-/// or `Err` for a record that should always be present once populated.
+/// The write lock serializes the directory swap in each `download_latest` call,
+/// and the read lock held by `get_record` prevents it from running concurrently
+/// with any write.  Therefore `get_record` must never return `Err` — it either
+/// finds no database yet (`Ok(None)`) or returns the populated record (`Ok(Some(…))`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
 async fn get_record_races_with_concurrent_download_latest() {
     let tmp = TempDir::new().unwrap();
@@ -35,8 +34,8 @@ async fn get_record_races_with_concurrent_download_latest() {
     let stop = Arc::new(AtomicBool::new(false));
     let stop_r = Arc::clone(&stop);
 
-    // Two concurrent download_latest calls: both will race to swap the records
-    // directory via remove_dir_all + rename under their respective write-locks.
+    // Two concurrent download_latest calls, each serialized by the write-lock
+    // around the remove_dir_all + rename swap.
     let dl1 = tokio::spawn({
         let db = db.clone();
         async move { db.download_latest().await }
@@ -46,8 +45,8 @@ async fn get_record_races_with_concurrent_download_latest() {
         async move { db.download_latest().await }
     });
 
-    // Reader: runs for the entire download duration.  Any Ok(None) or Err(_)
-    // result for a known record is evidence of the race having been observed.
+    // Reader: runs for the entire download duration.  An Err(_) result would
+    // indicate that the RwLock failed to prevent a torn read.
     let reader = tokio::spawn(async move {
         let record_id = "RUSTSEC-2024-0401".to_string();
         loop {

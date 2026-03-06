@@ -74,10 +74,8 @@ impl OsvDb {
     pub async fn download_latest(&self) -> anyhow::Result<()> {
         let (tmp_dir, ecosystem) = {
             let read_inner = self.read_inner();
-            (read_inner.tmp_dir("osv-download"), read_inner.ecosystem)
+            (read_inner.tmp_dir("osv-download")?, read_inner.ecosystem)
         };
-        std::fs::create_dir(&tmp_dir)
-            .with_context(|| format!("failed to create temp dir {}", tmp_dir.display()))?;
 
         download_and_extract_osv_archive(ecosystem.as_ref(), &tmp_dir).await?;
 
@@ -167,14 +165,10 @@ impl OsvDbInner {
     fn tmp_dir(
         &self,
         prefix: &str,
-    ) -> PathBuf {
-        let tmp_name = format!(
-            ".tmp-{prefix}-{}",
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |d| d.as_nanos())
-        );
-        self.location().join(tmp_name)
+    ) -> anyhow::Result<tempfile::TempDir> {
+        Ok(tempfile::Builder::new()
+            .prefix(prefix)
+            .tempdir_in(self.location())?)
     }
 
     fn get_record(
