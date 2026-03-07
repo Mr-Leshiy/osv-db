@@ -20,14 +20,16 @@ impl OsvState {
     /// into `path` (i.e. after [`download_and_extract_osv_archive`] has completed
     /// successfully).
     pub fn build(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            path.as_ref().is_dir(),
+            "Provided `path` {} must be a directory and exists",
+            path.as_ref().display()
+        );
         let res = Self {
             last_modified: DateTime::<Utc>::MIN_UTC,
             affected: HashMap::new(),
         };
-        if !path.as_ref().exists() {
-            return Ok(res);
-        }
-
+        
         let res = std::fs::read_dir(path.as_ref())
             .context("failed to read database directory")?
             .filter_map(|entry| {
