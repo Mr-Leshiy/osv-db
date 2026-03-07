@@ -2,24 +2,27 @@
 
 mod downloader;
 mod osv_gs;
-mod state;
 pub mod types;
 
 use std::{
-    collections::HashSet,
     fs::File,
+    io::Cursor,
     path::{Path, PathBuf},
-    sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    },
 };
 
+use anyhow::Context;
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
 
 pub use crate::osv_gs::OsvGsEcosystem;
 use crate::{
     downloader::{chuncked_download_to, simple_download_to},
     osv_gs::{osv_archive_url, osv_modified_id_csv_url, osv_record_url},
-    state::OsvState,
-    types::{OsvModifiedRecord, OsvRecord, OsvRecordId, PackageName},
+    types::{OsvModifiedRecord, OsvRecord, OsvRecordId},
 };
 
 const OSV_RECORD_FILE_EXTENSION: &str = "json";
@@ -34,8 +37,7 @@ struct OsvDbInner {
     location: PathBuf,
     /// Ecosystem this database was initialised for, or [`None`] for all ecosystems
     ecosystem: Option<OsvGsEcosystem>,
-    /// State of the database
-    state: RwLock<OsvState>,
+    last_modified: AtomicI64,
 }
 
 impl OsvDb {
@@ -55,15 +57,10 @@ impl OsvDb {
             "Provided `path` {} must be a directory and exists",
             path.as_ref().display()
         );
-        let records_dir = path.as_ref().join(RECORDS_DIRECTORY);
-        if !records_dir.exists() {
-            std::fs::create_dir(&records_dir)?;
-        }
-        let state = OsvState::build(records_dir)?;
         Ok(Self(Arc::new(OsvDbInner {
             location: path.as_ref().to_path_buf(),
             ecosystem,
-            state: RwLock::new(state),
+            last_modified: AtomicI64::default(),
         })))
     }
 
@@ -80,35 +77,7 @@ impl OsvDb {
     /// been populated.
     #[must_use]
     pub fn last_modified(&self) -> DateTime<Utc> {
-        self.read_state().last_modified
-    }
-
-    /// Returns the set of [`OsvRecordId`]s associated with the given package name,
-    /// or [`None`] if no records are found for that package.
-    #[must_use]
-    pub fn get_record_id(
-        &self,
-        package_name: &PackageName,
-    ) -> Option<HashSet<OsvRecordId>> {
-        self.read_state().affected.get(package_name).cloned()
-    }
-
-    /// Returns a read guard for [`OsvState`].
-    ///
-    /// Poisoning is ignored — if a thread panicked while holding the write lock, the
-    /// state is still returned as-is, since a partially-updated [`OsvState`] is
-    /// preferable to propagating the panic across unrelated callers.
-    fn read_state(&self) -> RwLockReadGuard<'_, OsvState> {
-        self.0.state.read().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Returns a write guard for [`OsvState`].
-    ///
-    /// Poisoning is ignored — if a thread panicked while holding the write lock, the
-    /// state is still returned as-is, since a partially-updated [`OsvState`] is
-    /// preferable to propagating the panic across unrelated callers.
-    fn write_state(&self) -> RwLockWriteGuard<'_, OsvState> {
-        self.0.state.write().unwrap_or_else(PoisonError::into_inner)
+        DateTime::<Utc>::from_timestamp_nanos(self.0.last_modified.load(Ordering::Acquire))
     }
 
     fn records_dir(&self) -> PathBuf {
@@ -158,19 +127,32 @@ impl OsvDb {
         chunk_size: u64,
     ) -> anyhow::Result<()> {
         let tmp_dir = self.tmp_dir("osv-download")?;
-        download_and_extract_osv_archive(self.0.ecosystem.as_ref(), &tmp_dir, chunk_size).await?;
+        let client = reqwest::Client::new();
+        download_and_extract_osv_archive(&client, self.0.ecosystem.as_ref(), &tmp_dir, chunk_size)
+            .await?;
+
+        let mut csv_rdr = download_osv_modified_csv(&client, self.0.ecosystem.as_ref()).await?;
+        // The data inside the OSV modified csv file is strictly sorted in reverse chronological
+        // order <https://google.github.io/osv.dev/data/#downloading-recent-changes>
+        let first_record = csv_rdr
+            .records()
+            .next()
+            .context("OSV modified csv file must have at least one entry")?;
+        let first_osv_record =
+            OsvModifiedRecord::try_from_csv_record(&first_record?, self.0.ecosystem)?;
+        let new_last_modified = first_osv_record.modified;
 
         let records_dir = self.records_dir();
-        let new_state = OsvState::build(&tmp_dir)?;
-        // acquire lock during all manipulation with the data
-        let mut state = self.write_state();
         if records_dir.exists() {
             std::fs::remove_dir_all(&records_dir)?;
         }
         // Replaces current records with the latest one
         std::fs::rename(&tmp_dir, records_dir)?;
 
-        *state = new_state;
+        let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
+        self.0
+            .last_modified
+            .store(new_last_modified_timestamp_nanos, Ordering::Release);
 
         Ok(())
     }
@@ -190,24 +172,14 @@ impl OsvDb {
         let last_modified = self.last_modified();
 
         let client = reqwest::Client::new();
-
-        let csv_text = client
-            .get(osv_modified_id_csv_url(ecosystem.as_ref()))
-            .send()
-            .await?
-            .text()
-            .await?;
-
-        let mut rdr = csv::ReaderBuilder::new()
-            .has_headers(false)
-            .from_reader(csv_text.as_bytes());
-
-        for result in rdr.records() {
+        let mut csv_rdr = download_osv_modified_csv(&client, ecosystem.as_ref()).await?;
+        let mut new_last_modified = last_modified;
+        for result in csv_rdr.records() {
             let entry = OsvModifiedRecord::try_from_csv_record(&result?, ecosystem)?;
-
             if entry.modified <= last_modified {
                 break;
             }
+            new_last_modified = new_last_modified.max(entry.modified);
 
             let mut record_filename = PathBuf::from(&entry.id);
             record_filename.add_extension(OSV_RECORD_FILE_EXTENSION);
@@ -220,17 +192,17 @@ impl OsvDb {
             .await?;
         }
 
-        let new_state = OsvState::build(tmp_dir.path())?;
-
-        let mut state = self.write_state();
-
         let records_dir = self.records_dir();
         for entry in std::fs::read_dir(tmp_dir.path())? {
             let entry = entry?;
             std::fs::rename(entry.path(), records_dir.join(entry.file_name()))?;
         }
 
-        state.merge(new_state);
+        let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
+        self.0
+            .last_modified
+            .store(new_last_modified_timestamp_nanos, Ordering::Release);
+
         Ok(())
     }
 }
@@ -238,11 +210,11 @@ impl OsvDb {
 /// Downloads the OSV archive for the given [`OsvGsEcosystem`] (or all ecosystems if
 /// [`None`]) from <https://storage.googleapis.com/osv-vulnerabilities> and extracts it into `path`.
 async fn download_and_extract_osv_archive(
+    client: &reqwest::Client,
     ecosystem: Option<&OsvGsEcosystem>,
     path: impl AsRef<Path>,
     chunk_size: u64,
 ) -> anyhow::Result<()> {
-    let client = reqwest::Client::new();
     let zip_archive_path = path.as_ref().join("osv.zip");
     let archive = chuncked_download_to(
         &client,
@@ -257,6 +229,22 @@ async fn download_and_extract_osv_archive(
     std::fs::remove_file(&zip_archive_path)?;
 
     Ok(())
+}
+
+async fn download_osv_modified_csv(
+    client: &reqwest::Client,
+    ecosystem: Option<&OsvGsEcosystem>,
+) -> anyhow::Result<csv::Reader<Cursor<Bytes>>> {
+    let csv_bytes = client
+        .get(osv_modified_id_csv_url(ecosystem))
+        .send()
+        .await?
+        .bytes()
+        .await?;
+
+    Ok(csv::ReaderBuilder::new()
+        .has_headers(false)
+        .from_reader(Cursor::new(csv_bytes)))
 }
 
 #[cfg(test)]
@@ -282,17 +270,6 @@ mod tests {
         osv.download_latest(10 * 1024 * 1024).await.unwrap();
 
         let record = osv.get_record(&record_id).unwrap().unwrap();
-        let package_name = record
-            .affected
-            .as_ref()
-            .and_then(|v| v.first())
-            .and_then(|a| a.package.as_ref())
-            .map(|p| p.name.clone())
-            .expect("RUSTSEC-2024-0401 must have at least one affected package");
-        assert!(
-            osv.get_record_id(&package_name)
-                .is_some_and(|ids| ids.contains(&record_id))
-        );
 
         // manipulates internal files, some existing records, to be able to test `sync` method
         let cutoff = record.modified;
@@ -310,7 +287,9 @@ mod tests {
 
         assert!(osv.get_record(&record_id).unwrap().is_none());
 
-        osv.write_state().last_modified = cutoff - chrono::Duration::nanoseconds(1);
+        osv.0
+            .last_modified
+            .store(cutoff.timestamp_nanos_opt().unwrap() - 1, Ordering::Release);
         osv.sync().await.unwrap();
 
         assert!(osv.get_record(&record_id).unwrap().is_some());
