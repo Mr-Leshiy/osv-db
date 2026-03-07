@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
+use rayon::prelude::*;
 
 use crate::types::{OsvRecord, OsvRecordId, PackageName};
 
@@ -29,13 +30,17 @@ impl OsvState {
             "Provided `path` {} must be a directory and exists",
             path.as_ref().display()
         );
-        let res = Self {
-            last_modified: DateTime::<Utc>::MIN_UTC,
-            affected: HashMap::new(),
+
+        let default_self = || {
+            Self {
+                last_modified: DateTime::<Utc>::MIN_UTC,
+                affected: HashMap::new(),
+            }
         };
 
-        let res = std::fs::read_dir(path.as_ref())
+        std::fs::read_dir(path.as_ref())
             .context("failed to read database directory")?
+            .par_bridge()
             .filter_map(|entry| {
                 match entry {
                     Ok(entry) => {
@@ -49,12 +54,16 @@ impl OsvState {
                     Err(err) => Some(Err(err.into())),
                 }
             })
-            .try_fold(res, |mut res, path| {
+            .map(|path| {
                 let path = path?;
                 let file = File::open(&path)
                     .with_context(|| format!("failed to open {}", path.display()))?;
                 let record: OsvRecord = serde_json::from_reader(file)
                     .with_context(|| format!("failed to deserialize {}", path.display()))?;
+                anyhow::Ok(record)
+            })
+            .try_fold(default_self, |mut res, record| {
+                let record = record?;
                 if record.modified > res.last_modified {
                     res.last_modified = record.modified;
                 }
@@ -69,9 +78,11 @@ impl OsvState {
                     }
                 }
                 anyhow::Ok(res)
-            })?;
-
-        Ok(res)
+            })
+            .try_reduce(default_self, |mut a, b| {
+                a.merge(b);
+                anyhow::Ok(a)
+            })
     }
 
     /// Merges `other` into `self`: all record IDs from `other.affected` are merged into
