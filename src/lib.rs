@@ -80,12 +80,13 @@ impl OsvDb {
         download_and_extract_osv_archive(ecosystem.as_ref(), &tmp_dir).await?;
 
         let mut write_inner = self.write_inner();
-        // cleans up the current state if its exitsts
         let records_dir = write_inner.records_path();
-        if records_dir.exists() {
-            std::fs::remove_dir_all(&records_dir)?;
-        }
-        // replace it with the latest one
+        // Replaces current records with the latest one
+        // 
+        // Dont need to have locks.
+        // Atomic operation in that sense that each file inside the directory could not be in an intermiary state.
+        // <https://man7.org/linux/man-pages/man2/rename.2.html>
+
         std::fs::rename(&tmp_dir, &records_dir)?;
 
         write_inner.last_modified = last_modified(&records_dir)?;
@@ -110,9 +111,14 @@ impl OsvDb {
     /// encountered, avoiding a full re-download. After all new records are saved,
     /// [`Self::last_modified`] is updated to the highest timestamp seen.
     pub async fn sync(&self) -> anyhow::Result<()> {
-        let (ecosystem, last_modified, records_dir) = {
+        let (tmp_dir, ecosystem, last_modified, records_dir) = {
             let inner = self.read_inner();
-            (inner.ecosystem, inner.last_modified, inner.records_path())
+            (
+                inner.tmp_dir("osv-sync")?,
+                inner.ecosystem,
+                inner.last_modified,
+                inner.records_path(),
+            )
         };
 
         let client = reqwest::Client::new();
@@ -139,15 +145,21 @@ impl OsvDb {
 
             new_last_modified = new_last_modified.max(entry.modified);
 
-            let mut record_path = records_dir.join(&entry.id);
-            record_path.add_extension(OSV_RECORD_FILE_EXTENSION);
+            let mut record_filename = PathBuf::from(&entry.id);
+            record_filename.add_extension(OSV_RECORD_FILE_EXTENSION);
+
+            let tmp_record_path = tmp_dir.path().join(&record_filename);
 
             simple_download_to(
                 &client,
                 &osv_record_url(Some(&entry.ecosystem), &entry.id),
-                record_path,
+                &tmp_record_path,
             )
             .await?;
+
+            let record_path = records_dir.join(&record_filename);
+
+            std::fs::rename(&tmp_record_path, &record_path)?;
         }
 
         self.write_inner().last_modified = new_last_modified;
