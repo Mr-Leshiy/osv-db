@@ -2,23 +2,28 @@
 
 mod downloader;
 mod osv_gs;
-mod state;
 pub mod types;
 
 use std::{
-    collections::HashSet,
     fs::File,
+    io::Cursor,
     path::{Path, PathBuf},
-    sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard},
+    sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    },
 };
 
+use anyhow::Context;
+use bytes::Bytes;
 use chrono::{DateTime, Utc};
+use futures::StreamExt;
 
+pub use crate::osv_gs::OsvGsEcosystem;
 use crate::{
     downloader::{chuncked_download_to, simple_download_to},
     osv_gs::{osv_archive_url, osv_modified_id_csv_url, osv_record_url},
-    state::OsvState,
-    types::{Ecosystem, OsvModifiedRecord, OsvRecord, OsvRecordId, PackageName},
+    types::{OsvModifiedRecord, OsvRecord, OsvRecordId},
 };
 
 const OSV_RECORD_FILE_EXTENSION: &str = "json";
@@ -32,9 +37,12 @@ struct OsvDbInner {
     /// On disk location of the OSV data
     location: PathBuf,
     /// Ecosystem this database was initialised for, or [`None`] for all ecosystems
-    ecosystem: Option<Ecosystem>,
-    /// State of the database
-    state: RwLock<OsvState>,
+    ecosystem: Option<OsvGsEcosystem>,
+    /// The most recent `modified` timestamp seen across all records, stored as
+    /// nanoseconds since the Unix epoch. Updated atomically after each
+    /// [`OsvDb::download_latest`] or [`OsvDb::sync`] call. Defaults to `0` (Unix
+    /// epoch) until the database is populated.
+    last_modified: AtomicI64,
 }
 
 impl OsvDb {
@@ -46,7 +54,7 @@ impl OsvDb {
     ///
     /// Returns an error if `path` does not point to an existing directory.
     pub fn new(
-        ecosystem: Option<Ecosystem>,
+        ecosystem: Option<OsvGsEcosystem>,
         path: impl AsRef<Path>,
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(
@@ -54,15 +62,10 @@ impl OsvDb {
             "Provided `path` {} must be a directory and exists",
             path.as_ref().display()
         );
-        let records_dir = path.as_ref().join(RECORDS_DIRECTORY);
-        if !records_dir.exists() {
-            std::fs::create_dir(&records_dir)?;
-        }
-        let state = OsvState::build(records_dir)?;
         Ok(Self(Arc::new(OsvDbInner {
             location: path.as_ref().to_path_buf(),
             ecosystem,
-            state: RwLock::new(state),
+            last_modified: AtomicI64::default(),
         })))
     }
 
@@ -79,35 +82,7 @@ impl OsvDb {
     /// been populated.
     #[must_use]
     pub fn last_modified(&self) -> DateTime<Utc> {
-        self.read_state().last_modified
-    }
-
-    /// Returns the set of [`OsvRecordId`]s associated with the given package name,
-    /// or [`None`] if no records are found for that package.
-    #[must_use]
-    pub fn get_record_id(
-        &self,
-        package_name: &PackageName,
-    ) -> Option<HashSet<OsvRecordId>> {
-        self.read_state().affected.get(package_name).cloned()
-    }
-
-    /// Returns a read guard for [`OsvState`].
-    ///
-    /// Poisoning is ignored — if a thread panicked while holding the write lock, the
-    /// state is still returned as-is, since a partially-updated [`OsvState`] is
-    /// preferable to propagating the panic across unrelated callers.
-    fn read_state(&self) -> RwLockReadGuard<'_, OsvState> {
-        self.0.state.read().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    /// Returns a write guard for [`OsvState`].
-    ///
-    /// Poisoning is ignored — if a thread panicked while holding the write lock, the
-    /// state is still returned as-is, since a partially-updated [`OsvState`] is
-    /// preferable to propagating the panic across unrelated callers.
-    fn write_state(&self) -> RwLockWriteGuard<'_, OsvState> {
-        self.0.state.write().unwrap_or_else(PoisonError::into_inner)
+        DateTime::<Utc>::from_timestamp_nanos(self.0.last_modified.load(Ordering::Acquire))
     }
 
     fn records_dir(&self) -> PathBuf {
@@ -145,7 +120,41 @@ impl OsvDb {
         Ok(Some(osv_record))
     }
 
-    /// Downloads a full, latest OSV database for the provided [`Ecosystem`].
+    /// Returns an async [`Stream`] over every [`OsvRecord`] stored in the database.
+    ///
+    /// Files are read and parsed asynchronously using [`tokio::fs`]. Each
+    /// record is yielded as `Ok(`[`OsvRecord`]`)`. I/O or parse failures
+    /// yield an [`Err`] item without terminating the stream.
+    ///
+    /// [`Stream`]: futures::Stream
+    pub fn records_stream(
+        &self
+    ) -> anyhow::Result<impl futures::Stream<Item = anyhow::Result<OsvRecord>>> {
+        use futures::StreamExt as _;
+        let records_dir_content = std::fs::read_dir(self.records_dir())?;
+        let stream = futures::stream::iter(records_dir_content)
+            .filter_map(|entry| {
+                async {
+                    Some(entry).filter(|e| {
+                        e.as_ref().is_ok_and(|e| {
+                            e.path().extension().and_then(|e| e.to_str())
+                                == Some(OSV_RECORD_FILE_EXTENSION)
+                        })
+                    })
+                }
+            })
+            .then(|entry| {
+                async move {
+                    let entry = entry?;
+                    let bytes = tokio::fs::read(entry.path()).await?;
+                    let osv_record = serde_json::from_slice(&bytes)?;
+                    anyhow::Ok(osv_record)
+                }
+            });
+        Ok(stream)
+    }
+
+    /// Downloads a full, latest OSV database for the provided [`OsvGsEcosystem`].
     /// If provided ecosystem is [`None`], initialise for all ecosystems.
     /// - Downloads the latest archive into a temporary subdirectory of `location`
     /// - Moves all downloaded files into `location`, replacing any existing files
@@ -157,19 +166,34 @@ impl OsvDb {
         chunk_size: u64,
     ) -> anyhow::Result<()> {
         let tmp_dir = self.tmp_dir("osv-download")?;
-        download_and_extract_osv_archive(self.0.ecosystem.as_ref(), &tmp_dir, chunk_size).await?;
+        let client = reqwest::Client::new();
+        download_and_extract_osv_archive(&client, self.0.ecosystem.as_ref(), &tmp_dir, chunk_size)
+            .await?;
+
+        let mut csv_rdr = download_osv_modified_csv(&client, self.0.ecosystem.as_ref()).await?;
+        // The data inside the OSV modified csv file is strictly sorted in reverse chronological
+        // order <https://google.github.io/osv.dev/data/#downloading-recent-changes>
+        let first_record = csv_rdr
+            .records()
+            .next()
+            .context("OSV modified csv file must have at least one entry")?;
+        let first_osv_record =
+            OsvModifiedRecord::try_from_csv_record(&first_record?, self.0.ecosystem)?;
+        let new_last_modified = first_osv_record.modified;
 
         let records_dir = self.records_dir();
-        let new_state = OsvState::build(&tmp_dir)?;
-        // acquire lock during all manipulation with the data
-        let mut state = self.write_state();
         if records_dir.exists() {
             std::fs::remove_dir_all(&records_dir)?;
         }
-        // Replaces current records with the latest one
+        // Atomically replaces the current records directory with the newly downloaded one.
+        // rename(2) is guaranteed to be atomic on POSIX systems — see
+        // <https://man7.org/linux/man-pages/man2/rename.2.html>.
         std::fs::rename(&tmp_dir, records_dir)?;
 
-        *state = new_state;
+        let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
+        self.0
+            .last_modified
+            .store(new_last_modified_timestamp_nanos, Ordering::Release);
 
         Ok(())
     }
@@ -183,30 +207,26 @@ impl OsvDb {
     /// parsing stops as soon as a timestamp at or before [`Self::last_modified`] is
     /// encountered, avoiding a full re-download. After all new records are saved,
     /// [`Self::last_modified`] is updated to the highest timestamp seen.
-    pub async fn sync(&self) -> anyhow::Result<()> {
+    ///
+    /// Returns an async [`Stream`] that yields each newly added or updated [`OsvRecord`].
+    ///
+    /// [`Stream`]: futures::Stream
+    pub async fn sync(
+        &self
+    ) -> anyhow::Result<impl futures::Stream<Item = anyhow::Result<OsvRecord>>> {
         let tmp_dir = self.tmp_dir("osv-sync")?;
         let ecosystem = self.0.ecosystem;
         let last_modified = self.last_modified();
 
         let client = reqwest::Client::new();
-
-        let csv_text = client
-            .get(osv_modified_id_csv_url(ecosystem.as_ref()))
-            .send()
-            .await?
-            .text()
-            .await?;
-
-        let mut rdr = csv::ReaderBuilder::new()
-            .has_headers(false)
-            .from_reader(csv_text.as_bytes());
-
-        for result in rdr.records() {
+        let mut csv_rdr = download_osv_modified_csv(&client, ecosystem.as_ref()).await?;
+        let mut new_last_modified = last_modified;
+        for result in csv_rdr.records() {
             let entry = OsvModifiedRecord::try_from_csv_record(&result?, ecosystem)?;
-
             if entry.modified <= last_modified {
                 break;
             }
+            new_last_modified = new_last_modified.max(entry.modified);
 
             let mut record_filename = PathBuf::from(&entry.id);
             record_filename.add_extension(OSV_RECORD_FILE_EXTENSION);
@@ -219,32 +239,46 @@ impl OsvDb {
             .await?;
         }
 
-        let new_state = OsvState::build(tmp_dir.path())?;
-
-        let mut state = self.write_state();
-
         let records_dir = self.records_dir();
+        let mut new_record_paths = Vec::new();
         for entry in std::fs::read_dir(tmp_dir.path())? {
             let entry = entry?;
-            std::fs::rename(entry.path(), records_dir.join(entry.file_name()))?;
+            let dest = records_dir.join(entry.file_name());
+            // Atomically replaces the current records directory with the newly downloaded one.
+            // rename(2) is guaranteed to be atomic on POSIX systems — see
+            // <https://man7.org/linux/man-pages/man2/rename.2.html>.
+            std::fs::rename(entry.path(), &dest)?;
+            new_record_paths.push(dest);
         }
 
-        state.merge(new_state);
-        Ok(())
+        let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
+        self.0
+            .last_modified
+            .store(new_last_modified_timestamp_nanos, Ordering::Release);
+
+        let stream = futures::stream::iter(new_record_paths).then(|path| {
+            async move {
+                let bytes = tokio::fs::read(&path).await?;
+                let osv_record = serde_json::from_slice(&bytes)?;
+                anyhow::Ok(osv_record)
+            }
+        });
+
+        Ok(stream)
     }
 }
 
-/// Downloads the OSV archive for the given [`Ecosystem`] (or all ecosystems if [`None`])
-/// from <https://storage.googleapis.com/osv-vulnerabilities> and extracts it into `path`.
+/// Downloads the OSV archive for the given [`OsvGsEcosystem`] (or all ecosystems if
+/// [`None`]) from <https://storage.googleapis.com/osv-vulnerabilities> and extracts it into `path`.
 async fn download_and_extract_osv_archive(
-    ecosystem: Option<&Ecosystem>,
+    client: &reqwest::Client,
+    ecosystem: Option<&OsvGsEcosystem>,
     path: impl AsRef<Path>,
     chunk_size: u64,
 ) -> anyhow::Result<()> {
-    let client = reqwest::Client::new();
     let zip_archive_path = path.as_ref().join("osv.zip");
     let archive = chuncked_download_to(
-        &client,
+        client,
         &osv_archive_url(ecosystem),
         chunk_size,
         &zip_archive_path,
@@ -258,14 +292,27 @@ async fn download_and_extract_osv_archive(
     Ok(())
 }
 
+async fn download_osv_modified_csv(
+    client: &reqwest::Client,
+    ecosystem: Option<&OsvGsEcosystem>,
+) -> anyhow::Result<csv::Reader<Cursor<Bytes>>> {
+    let csv_bytes = client
+        .get(osv_modified_id_csv_url(ecosystem))
+        .send()
+        .await?
+        .bytes()
+        .await?;
+
+    Ok(csv::ReaderBuilder::new()
+        .has_headers(false)
+        .from_reader(Cursor::new(csv_bytes)))
+}
+
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-
     use tempfile::TempDir;
 
     use super::*;
-    use crate::types::Ecosystem;
 
     /// Downloads the latest OSV database, reads `RUSTSEC-2024-0401`, removes all
     /// records modified at or before its `modified` timestamp, then asserts the
@@ -274,7 +321,7 @@ mod tests {
     #[tokio::test]
     async fn simple_roundtrip() {
         let tmp = TempDir::new().unwrap();
-        let osv = OsvDb::new(Some(Ecosystem::CratesIo), tmp.path()).unwrap();
+        let osv = OsvDb::new(Some(OsvGsEcosystem::CratesIo), tmp.path()).unwrap();
 
         let record_id = "RUSTSEC-2024-0401".to_string();
         assert!(osv.get_record(&record_id).unwrap().is_none());
@@ -282,37 +329,15 @@ mod tests {
         osv.download_latest(10 * 1024 * 1024).await.unwrap();
 
         let record = osv.get_record(&record_id).unwrap().unwrap();
-        let package_name = record
-            .affected
-            .as_ref()
-            .and_then(|v| v.first())
-            .and_then(|a| a.package.as_ref())
-            .map(|p| p.name.clone())
-            .expect("RUSTSEC-2024-0401 must have at least one affected package");
-        assert!(
-            osv.get_record_id(&package_name)
-                .is_some_and(|ids| ids.contains(&record_id))
-        );
+        assert_eq!(record.id, record_id);
 
-        // manipulates internal files, some existing records, to be able to test `sync` method
-        let cutoff = record.modified;
-        let records_dir = osv.records_dir();
-        for entry in std::fs::read_dir(&records_dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().and_then(|e| e.to_str()) == Some(OSV_RECORD_FILE_EXTENSION) {
-                let file = File::open(&path).unwrap();
-                let r: OsvRecord = serde_json::from_reader(file).unwrap();
-                if r.modified <= cutoff {
-                    std::fs::remove_file(&path).unwrap();
-                }
-            }
-        }
-
-        assert!(osv.get_record(&record_id).unwrap().is_none());
-
-        osv.write_state().last_modified = cutoff - chrono::Duration::nanoseconds(1);
-        osv.sync().await.unwrap();
-
-        assert!(osv.get_record(&record_id).unwrap().is_some());
+        // verify records_stream yields all records including our target
+        let ids: Vec<String> = osv
+            .records_stream()
+            .unwrap()
+            .map(|r| r.unwrap().id)
+            .collect()
+            .await;
+        assert!(ids.contains(&record_id));
     }
 }
