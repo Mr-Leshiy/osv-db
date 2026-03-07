@@ -50,10 +50,13 @@ impl OsvDb {
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(
             path.as_ref().is_dir(),
-            "Provided `path` {} must be a directory",
+            "Provided `path` {} must be a directory and exists",
             path.as_ref().display()
         );
         let records_dir = path.as_ref().join(RECORDS_DIRECTORY);
+        if !records_dir.exists() {
+            std::fs::create_dir(&records_dir)?;
+        }
         let state = OsvState::build(records_dir)?;
         Ok(Self(Arc::new(OsvDbInner {
             location: path.as_ref().to_path_buf(),
@@ -173,7 +176,6 @@ impl OsvDb {
         let tmp_dir = self.tmp_dir("osv-sync")?;
         let ecosystem = self.0.ecosystem;
         let last_modified = self.last_modified();
-        let records_dir = self.records_dir();
 
         let client = reqwest::Client::new();
 
@@ -183,8 +185,6 @@ impl OsvDb {
             .await?
             .text()
             .await?;
-
-        let mut new_last_modified = last_modified;
 
         let mut rdr = csv::ReaderBuilder::new()
             .has_headers(false)
@@ -197,26 +197,28 @@ impl OsvDb {
                 break;
             }
 
-            new_last_modified = new_last_modified.max(entry.modified);
-
             let mut record_filename = PathBuf::from(&entry.id);
             record_filename.add_extension(OSV_RECORD_FILE_EXTENSION);
-
-            let tmp_record_path = tmp_dir.path().join(&record_filename);
 
             simple_download_to(
                 &client,
                 &osv_record_url(Some(&entry.ecosystem), &entry.id),
-                &tmp_record_path,
+                &tmp_dir.path().join(&record_filename),
             )
             .await?;
-
-            let record_path = records_dir.join(&record_filename);
-
-            std::fs::rename(&tmp_record_path, &record_path)?;
         }
 
-        self.write_state().last_modified = new_last_modified;
+        let new_state = OsvState::build(tmp_dir.path())?;
+
+        let mut state = self.write_state();
+
+        let records_dir = self.records_dir();
+        for entry in std::fs::read_dir(tmp_dir.path())? {
+            let entry = entry?;
+            std::fs::rename(entry.path(), records_dir.join(entry.file_name()))?;
+        }
+
+        *state = new_state;
         Ok(())
     }
 }
