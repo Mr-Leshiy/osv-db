@@ -13,7 +13,7 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use osv_db::{OsvDb, types::Ecosystem};
+use osv_db::{OsvDb, OsvGsEcosystem};
 use tempfile::TempDir;
 
 /// Spawns two concurrent `download_latest` tasks on clones of the same [`OsvDb`]
@@ -29,7 +29,7 @@ async fn get_record_races_with_concurrent_download_latest() {
     const CHUNK_SIZE: u64 = 10 * 1024 * 1024;
 
     let tmp = TempDir::new().unwrap();
-    let db = OsvDb::new(Some(Ecosystem::CratesIo), tmp.path()).unwrap();
+    let db = OsvDb::new(Some(OsvGsEcosystem::CratesIo), tmp.path()).unwrap();
 
     let stop = Arc::new(AtomicBool::new(false));
     let stop_r = Arc::clone(&stop);

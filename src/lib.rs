@@ -14,9 +14,10 @@ use std::{
 
 use chrono::{DateTime, Utc};
 
+pub use crate::osv_gs::OsvGsEcosystem;
 use crate::{
     downloader::{chuncked_download_to, simple_download_to},
-    osv_gs::{OsvGsEcosystem, osv_archive_url, osv_modified_id_csv_url, osv_record_url},
+    osv_gs::{osv_archive_url, osv_modified_id_csv_url, osv_record_url},
     state::OsvState,
     types::{OsvModifiedRecord, OsvRecord, OsvRecordId, PackageName},
 };
