@@ -226,7 +226,7 @@ async fn download_and_extract_osv_archive(
 ) -> anyhow::Result<()> {
     let zip_archive_path = path.as_ref().join("osv.zip");
     let archive = chuncked_download_to(
-        &client,
+        client,
         &osv_archive_url(ecosystem),
         chunk_size,
         &zip_archive_path,
