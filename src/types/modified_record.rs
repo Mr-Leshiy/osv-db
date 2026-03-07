@@ -1,14 +1,15 @@
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 
-use super::{Ecosystem, OsvRecordId};
+use super::OsvRecordId;
+use crate::osv_gs::OsvGsEcosystem;
 
 /// A single entry from a `modified_id.csv` index file.
 pub struct OsvModifiedRecord {
     /// Timestamp of the last modification.
     pub modified: DateTime<Utc>,
     /// Ecosystem the record belongs to.
-    pub ecosystem: Ecosystem,
+    pub ecosystem: OsvGsEcosystem,
     /// Unique vulnerability identifier (e.g. `RUSTSEC-2024-0001`).
     pub id: OsvRecordId,
 }
@@ -21,7 +22,7 @@ impl OsvModifiedRecord {
     /// otherwise.
     pub fn try_from_csv_record(
         record: &csv::StringRecord,
-        ecosystem: Option<Ecosystem>,
+        ecosystem: Option<OsvGsEcosystem>,
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(
             record.len() == 2,

@@ -16,9 +16,9 @@ use chrono::{DateTime, Utc};
 
 use crate::{
     downloader::{chuncked_download_to, simple_download_to},
-    osv_gs::{osv_archive_url, osv_modified_id_csv_url, osv_record_url},
+    osv_gs::{OsvGsEcosystem, osv_archive_url, osv_modified_id_csv_url, osv_record_url},
     state::OsvState,
-    types::{Ecosystem, OsvModifiedRecord, OsvRecord, OsvRecordId, PackageName},
+    types::{OsvModifiedRecord, OsvRecord, OsvRecordId, PackageName},
 };
 
 const OSV_RECORD_FILE_EXTENSION: &str = "json";
@@ -32,7 +32,7 @@ struct OsvDbInner {
     /// On disk location of the OSV data
     location: PathBuf,
     /// Ecosystem this database was initialised for, or [`None`] for all ecosystems
-    ecosystem: Option<Ecosystem>,
+    ecosystem: Option<OsvGsEcosystem>,
     /// State of the database
     state: RwLock<OsvState>,
 }
@@ -46,7 +46,7 @@ impl OsvDb {
     ///
     /// Returns an error if `path` does not point to an existing directory.
     pub fn new(
-        ecosystem: Option<Ecosystem>,
+        ecosystem: Option<OsvGsEcosystem>,
         path: impl AsRef<Path>,
     ) -> anyhow::Result<Self> {
         anyhow::ensure!(
@@ -145,7 +145,7 @@ impl OsvDb {
         Ok(Some(osv_record))
     }
 
-    /// Downloads a full, latest OSV database for the provided [`Ecosystem`].
+    /// Downloads a full, latest OSV database for the provided [`OsvGsEcosystem`].
     /// If provided ecosystem is [`None`], initialise for all ecosystems.
     /// - Downloads the latest archive into a temporary subdirectory of `location`
     /// - Moves all downloaded files into `location`, replacing any existing files
@@ -234,10 +234,10 @@ impl OsvDb {
     }
 }
 
-/// Downloads the OSV archive for the given [`Ecosystem`] (or all ecosystems if [`None`])
-/// from <https://storage.googleapis.com/osv-vulnerabilities> and extracts it into `path`.
+/// Downloads the OSV archive for the given [`OsvGsEcosystem`] (or all ecosystems if
+/// [`None`]) from <https://storage.googleapis.com/osv-vulnerabilities> and extracts it into `path`.
 async fn download_and_extract_osv_archive(
-    ecosystem: Option<&Ecosystem>,
+    ecosystem: Option<&OsvGsEcosystem>,
     path: impl AsRef<Path>,
     chunk_size: u64,
 ) -> anyhow::Result<()> {
@@ -265,7 +265,6 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::types::Ecosystem;
 
     /// Downloads the latest OSV database, reads `RUSTSEC-2024-0401`, removes all
     /// records modified at or before its `modified` timestamp, then asserts the
@@ -274,7 +273,7 @@ mod tests {
     #[tokio::test]
     async fn simple_roundtrip() {
         let tmp = TempDir::new().unwrap();
-        let osv = OsvDb::new(Some(Ecosystem::CratesIo), tmp.path()).unwrap();
+        let osv = OsvDb::new(Some(OsvGsEcosystem::CratesIo), tmp.path()).unwrap();
 
         let record_id = "RUSTSEC-2024-0401".to_string();
         assert!(osv.get_record(&record_id).unwrap().is_none());

@@ -126,7 +126,7 @@ impl FromStr for EcosystemWithSuffix {
     type Err = <Ecosystem as FromStr>::Err;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        if let Some((s, suffix)) = s.split_once("GIT:") {
+        if let Some((s, suffix)) = s.split_once(":") {
             Ok(Self(s.parse()?, Some(suffix.to_string())))
         } else {
             Ok(Self(s.parse()?, None))
