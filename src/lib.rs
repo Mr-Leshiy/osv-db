@@ -8,13 +8,9 @@ pub mod types;
 use std::{
     fs::File,
     path::{Path, PathBuf},
-    sync::{
-        Arc,
-        atomic::{AtomicI64, Ordering},
-    },
+    sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard},
 };
 
-use anyhow::Context;
 use chrono::{DateTime, Utc};
 
 use crate::{
@@ -36,9 +32,8 @@ struct OsvDbInner {
     location: PathBuf,
     /// Ecosystem this database was initialised for, or [`None`] for all ecosystems
     ecosystem: Option<Ecosystem>,
-    /// The latest `modified` timestamp across all records in the database
-    /// Stored as an [`AtomicI64`] timestamp nanos
-    last_modified: AtomicI64,
+    /// State of the database
+    state: RwLock<OsvState>,
 }
 
 impl OsvDb {
@@ -61,7 +56,9 @@ impl OsvDb {
         Ok(Self(Arc::new(OsvDbInner {
             location: path.as_ref().to_path_buf(),
             ecosystem,
-            last_modified: AtomicI64::default(),
+            state: RwLock::new(OsvState {
+                last_modified: DateTime::<Utc>::MIN_UTC,
+            }),
         })))
     }
 
@@ -78,8 +75,25 @@ impl OsvDb {
     /// been populated.
     #[must_use]
     pub fn last_modified(&self) -> DateTime<Utc> {
-        let last_modified_timestamp_nanos = self.0.last_modified.load(Ordering::Acquire);
-        DateTime::<Utc>::from_timestamp_nanos(last_modified_timestamp_nanos)
+        self.read_state().last_modified
+    }
+
+    /// Returns a read guard for [`OsvState`].
+    ///
+    /// Poisoning is ignored — if a thread panicked while holding the write lock, the
+    /// state is still returned as-is, since a partially-updated [`OsvState`] is
+    /// preferable to propagating the panic across unrelated callers.
+    fn read_state(&self) -> RwLockReadGuard<'_, OsvState> {
+        self.0.state.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Returns a write guard for [`OsvState`].
+    ///
+    /// Poisoning is ignored — if a thread panicked while holding the write lock, the
+    /// state is still returned as-is, since a partially-updated [`OsvState`] is
+    /// preferable to propagating the panic across unrelated callers.
+    fn write_state(&self) -> RwLockWriteGuard<'_, OsvState> {
+        self.0.state.write().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn records_dir(&self) -> PathBuf {
@@ -143,10 +157,7 @@ impl OsvDb {
         // intermiary state. <https://man7.org/linux/man-pages/man2/rename.2.html>
         std::fs::rename(&tmp_dir, records_dir)?;
 
-        let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
-        self.0
-            .last_modified
-            .store(new_last_modified_timestamp_nanos, Ordering::Release);
+        self.write_state().last_modified = new_last_modified;
 
         Ok(())
     }
@@ -207,10 +218,7 @@ impl OsvDb {
             std::fs::rename(&tmp_record_path, &record_path)?;
         }
 
-        let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
-        self.0
-            .last_modified
-            .store(new_last_modified_timestamp_nanos, Ordering::Release);
+        self.write_state().last_modified = new_last_modified;
         Ok(())
     }
 }
@@ -279,9 +287,7 @@ mod tests {
 
         assert!(osv.get_record(&record_id).unwrap().is_none());
 
-        osv.0
-            .last_modified
-            .store(cutoff.timestamp_nanos_opt().unwrap() - 1, Ordering::Release);
+        osv.write_state().last_modified = cutoff - chrono::Duration::nanoseconds(1);
         osv.sync().await.unwrap();
 
         assert!(osv.get_record(&record_id).unwrap().is_some());

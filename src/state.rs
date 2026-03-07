@@ -5,17 +5,19 @@ use chrono::{DateTime, Utc};
 
 use crate::types::OsvRecord;
 
+#[derive(Debug)]
 pub struct OsvState {
     pub last_modified: DateTime<Utc>,
 }
 
 impl OsvState {
     /// Scans all `.json` files in `path`, deserializes them as [`OsvRecord`]s, and builds
-    /// an [`OsvState`] with the maximum [`OsvRecord::modified`] timestamp found across all
-    /// records.
+    /// an [`OsvState`] with the maximum [`OsvRecord::modified`] timestamp found across
+    /// all records.
     ///
-    /// Must be called after the OSV archive has already been downloaded and extracted into
-    /// `path` (i.e. after [`download_and_extract_osv_archive`] has completed successfully).
+    /// Must be called after the OSV archive has already been downloaded and extracted
+    /// into `path` (i.e. after [`download_and_extract_osv_archive`] has completed
+    /// successfully).
     pub fn build(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let last_modified = std::fs::read_dir(path.as_ref())
             .context("failed to read database directory")?
@@ -38,7 +40,7 @@ impl OsvState {
                     .with_context(|| format!("failed to open {}", path.display()))?;
                 let record: OsvRecord = serde_json::from_reader(file)
                     .with_context(|| format!("failed to deserialize {}", path.display()))?;
-                Ok(max.max(record.modified))
+                anyhow::Ok(max.max(record.modified))
             })?;
 
         Ok(Self { last_modified })
