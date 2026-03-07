@@ -40,6 +40,13 @@ struct OsvDbInner {
 }
 
 impl OsvDb {
+    /// Creates a new [`OsvDb`] rooted at `path` for the given `ecosystem`.
+    ///
+    /// If `ecosystem` is [`None`], the database covers all ecosystems.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `path` does not point to an existing directory.
     pub fn new(
         ecosystem: Option<Ecosystem>,
         path: impl AsRef<Path>,
@@ -62,6 +69,11 @@ impl OsvDb {
         &self.0.location
     }
 
+    /// Returns the latest `modified` timestamp seen across all records in the database.
+    ///
+    /// The value reflects the most recent [`download_latest`](Self::download_latest) or
+    /// [`sync`](Self::sync) call. Returns the Unix epoch if the database has not yet
+    /// been populated.
     pub fn last_modified(&self) -> DateTime<Utc> {
         let last_modified_timestamp_nanos = self.0.last_modified.load(Ordering::Acquire);
         DateTime::<Utc>::from_timestamp_nanos(last_modified_timestamp_nanos)
@@ -80,6 +92,13 @@ impl OsvDb {
             .tempdir_in(self.location())?)
     }
 
+    /// Looks up a single OSV record by its [`OsvRecordId`].
+    ///
+    /// Returns `Ok(None)` if no record matching `id` exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the record file cannot be opened or deserialized.
     pub fn get_record(
         &self,
         id: &OsvRecordId,
