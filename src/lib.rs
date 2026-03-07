@@ -37,6 +37,10 @@ struct OsvDbInner {
     location: PathBuf,
     /// Ecosystem this database was initialised for, or [`None`] for all ecosystems
     ecosystem: Option<OsvGsEcosystem>,
+    /// The most recent `modified` timestamp seen across all records, stored as
+    /// nanoseconds since the Unix epoch. Updated atomically after each
+    /// [`OsvDb::download_latest`] or [`OsvDb::sync`] call. Defaults to `0` (Unix
+    /// epoch) until the database is populated.
     last_modified: AtomicI64,
 }
 
@@ -146,7 +150,9 @@ impl OsvDb {
         if records_dir.exists() {
             std::fs::remove_dir_all(&records_dir)?;
         }
-        // Replaces current records with the latest one
+        // Atomically replaces the current records directory with the newly downloaded one.
+        // rename(2) is guaranteed to be atomic on POSIX systems — see
+        // <https://man7.org/linux/man-pages/man2/rename.2.html>.
         std::fs::rename(&tmp_dir, records_dir)?;
 
         let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
@@ -195,6 +201,9 @@ impl OsvDb {
         let records_dir = self.records_dir();
         for entry in std::fs::read_dir(tmp_dir.path())? {
             let entry = entry?;
+            // Atomically replaces the current records directory with the newly downloaded one.
+            // rename(2) is guaranteed to be atomic on POSIX systems — see
+            // <https://man7.org/linux/man-pages/man2/rename.2.html>.
             std::fs::rename(entry.path(), records_dir.join(entry.file_name()))?;
         }
 
