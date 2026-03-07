@@ -17,6 +17,7 @@ use std::{
 use anyhow::Context;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
+use futures::StreamExt;
 
 pub use crate::osv_gs::OsvGsEcosystem;
 use crate::{
@@ -126,7 +127,6 @@ impl OsvDb {
     /// yield an [`Err`] item without terminating the stream.
     ///
     /// [`Stream`]: futures::Stream
-    #[must_use]
     pub fn records_stream(
         &self
     ) -> anyhow::Result<impl futures::Stream<Item = anyhow::Result<OsvRecord>>> {
@@ -207,7 +207,13 @@ impl OsvDb {
     /// parsing stops as soon as a timestamp at or before [`Self::last_modified`] is
     /// encountered, avoiding a full re-download. After all new records are saved,
     /// [`Self::last_modified`] is updated to the highest timestamp seen.
-    pub async fn sync(&self) -> anyhow::Result<()> {
+    ///
+    /// Returns an async [`Stream`] that yields each newly added or updated [`OsvRecord`].
+    ///
+    /// [`Stream`]: futures::Stream
+    pub async fn sync(
+        &self
+    ) -> anyhow::Result<impl futures::Stream<Item = anyhow::Result<OsvRecord>>> {
         let tmp_dir = self.tmp_dir("osv-sync")?;
         let ecosystem = self.0.ecosystem;
         let last_modified = self.last_modified();
@@ -234,12 +240,15 @@ impl OsvDb {
         }
 
         let records_dir = self.records_dir();
+        let mut new_record_paths = Vec::new();
         for entry in std::fs::read_dir(tmp_dir.path())? {
             let entry = entry?;
+            let dest = records_dir.join(entry.file_name());
             // Atomically replaces the current records directory with the newly downloaded one.
             // rename(2) is guaranteed to be atomic on POSIX systems — see
             // <https://man7.org/linux/man-pages/man2/rename.2.html>.
-            std::fs::rename(entry.path(), records_dir.join(entry.file_name()))?;
+            std::fs::rename(entry.path(), &dest)?;
+            new_record_paths.push(dest);
         }
 
         let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
@@ -247,7 +256,15 @@ impl OsvDb {
             .last_modified
             .store(new_last_modified_timestamp_nanos, Ordering::Release);
 
-        Ok(())
+        let stream = futures::stream::iter(new_record_paths).then(|path| {
+            async move {
+                let bytes = tokio::fs::read(&path).await?;
+                let osv_record = serde_json::from_slice(&bytes)?;
+                anyhow::Ok(osv_record)
+            }
+        });
+
+        Ok(stream)
     }
 }
 
@@ -261,7 +278,7 @@ async fn download_and_extract_osv_archive(
 ) -> anyhow::Result<()> {
     let zip_archive_path = path.as_ref().join("osv.zip");
     let archive = chuncked_download_to(
-        &client,
+        client,
         &osv_archive_url(ecosystem),
         chunk_size,
         &zip_archive_path,
@@ -315,7 +332,6 @@ mod tests {
         assert_eq!(record.id, record_id);
 
         // verify records_stream yields all records including our target
-        use futures::StreamExt as _;
         let ids: Vec<String> = osv
             .records_stream()
             .unwrap()
