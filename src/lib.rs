@@ -74,6 +74,7 @@ impl OsvDb {
     /// The value reflects the most recent [`download_latest`](Self::download_latest) or
     /// [`sync`](Self::sync) call. Returns the Unix epoch if the database has not yet
     /// been populated.
+    #[must_use]
     pub fn last_modified(&self) -> DateTime<Utc> {
         let last_modified_timestamp_nanos = self.0.last_modified.load(Ordering::Acquire);
         DateTime::<Utc>::from_timestamp_nanos(last_modified_timestamp_nanos)
@@ -268,6 +269,7 @@ fn scan_last_modified(path: impl AsRef<Path>) -> anyhow::Result<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
+
     use tempfile::TempDir;
 
     use super::*;
