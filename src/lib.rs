@@ -175,7 +175,7 @@ async fn download_and_extract_osv_archive(
     ecosystem: Option<&Ecosystem>,
     path: impl AsRef<Path>,
 ) -> anyhow::Result<()> {
-    const CHUNK_SIZE: u64 = 1024 * 1024; // 1 MB
+    const CHUNK_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
 
     let client = reqwest::Client::new();
     let zip_archive_path = path.as_ref().join("osv.zip");
