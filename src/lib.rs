@@ -149,9 +149,9 @@ impl OsvDb {
         download_and_extract_osv_archive(self.0.ecosystem.as_ref(), &tmp_dir, chunk_size).await?;
 
         let records_dir = self.records_dir();
+        let new_state = OsvState::build(&tmp_dir)?;
         // acquire lock during all manipulation with the data
         let mut state = self.write_state();
-        let new_state = OsvState::build(&tmp_dir)?;
         if records_dir.exists() {
             std::fs::remove_dir_all(&records_dir)?;
         }
