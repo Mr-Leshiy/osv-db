@@ -274,7 +274,7 @@ mod tests {
         let record = osv.get_record(&record_id).unwrap().unwrap();
         let cutoff = record.modified;
 
-        let records_dir = tmp.path().join("records");
+        let records_dir = osv.read_inner().records_path();
         for entry in std::fs::read_dir(&records_dir).unwrap() {
             let path = entry.unwrap().path();
             if path.extension().and_then(|e| e.to_str()) == Some(OSV_RECORD_FILE_EXTENSION) {
