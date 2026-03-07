@@ -26,6 +26,8 @@ use tempfile::TempDir;
 /// finds no database yet (`Ok(None)`) or returns the populated record (`Ok(Some(…))`).
 #[tokio::test(flavor = "multi_thread", worker_threads = 5)]
 async fn get_record_races_with_concurrent_download_latest() {
+    const CHUNK_SIZE: u64 = 10 * 1024 * 1024;
+
     let tmp = TempDir::new().unwrap();
     let db = OsvDb::new(Some(Ecosystem::CratesIo), tmp.path()).unwrap();
 
@@ -36,11 +38,11 @@ async fn get_record_races_with_concurrent_download_latest() {
     // around the remove_dir_all + rename swap.
     let dl1 = tokio::spawn({
         let db = db.clone();
-        async move { db.download_latest().await }
+        async move { db.download_latest(CHUNK_SIZE).await }
     });
     let dl2 = tokio::spawn({
         let db = db.clone();
-        async move { db.download_latest().await }
+        async move { db.download_latest(CHUNK_SIZE).await }
     });
 
     // Reader: runs for the entire download duration.  An Err(_) result would
