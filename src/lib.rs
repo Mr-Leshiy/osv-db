@@ -7,7 +7,10 @@ pub mod types;
 use std::{
     fs::File,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicI64, Ordering},
+    },
 };
 
 use anyhow::Context;
@@ -32,7 +35,8 @@ struct OsvDbInner {
     /// Ecosystem this database was initialised for, or [`None`] for all ecosystems
     ecosystem: Option<Ecosystem>,
     /// The latest `modified` timestamp across all records in the database
-    last_modified: DateTime<Utc>,
+    /// Stored as an [`AtomicI64`] timestamp nanos
+    last_modified: AtomicI64,
 }
 
 impl OsvDb {
@@ -48,7 +52,7 @@ impl OsvDb {
         Ok(Self(Arc::new(OsvDbInner {
             location: path.as_ref().to_path_buf(),
             ecosystem,
-            last_modified: DateTime::<Utc>::MIN_UTC,
+            last_modified: AtomicI64::default(),
         })))
     }
 
@@ -56,6 +60,11 @@ impl OsvDb {
     #[must_use]
     pub fn location(&self) -> &Path {
         &self.0.location
+    }
+
+    pub fn last_modified(&self) -> DateTime<Utc> {
+        let last_modified_timestamp_nanos = self.0.last_modified.load(Ordering::Acquire);
+        DateTime::<Utc>::from_timestamp_nanos(last_modified_timestamp_nanos)
     }
 
     fn records_dir(&self) -> PathBuf {
@@ -71,7 +80,7 @@ impl OsvDb {
             .tempdir_in(self.location())?)
     }
 
-    fn get_record(
+    pub fn get_record(
         &self,
         id: &OsvRecordId,
     ) -> anyhow::Result<Option<OsvRecord>> {
@@ -97,13 +106,22 @@ impl OsvDb {
         let tmp_dir = self.tmp_dir("osv-download")?;
         download_and_extract_osv_archive(self.0.ecosystem.as_ref(), &tmp_dir).await?;
 
-        let _new_last_modified = last_modified(&tmp_dir)?;
+        let new_last_modified = scan_last_modified(&tmp_dir)?;
+        let records_dir = self.records_dir();
+        if records_dir.exists() {
+            std::fs::remove_dir_all(&records_dir)?;
+        }
         // Replaces current records with the latest one
         //
         // Dont need to have locks.
         // Atomic operation in that sense that each file inside the directory could not be in an
         // intermiary state. <https://man7.org/linux/man-pages/man2/rename.2.html>
-        std::fs::rename(&tmp_dir, self.records_dir())?;
+        std::fs::rename(&tmp_dir, records_dir)?;
+
+        let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
+        self.0
+            .last_modified
+            .store(new_last_modified_timestamp_nanos, Ordering::Release);
 
         Ok(())
     }
@@ -120,7 +138,7 @@ impl OsvDb {
     pub async fn sync(&self) -> anyhow::Result<()> {
         let tmp_dir = self.tmp_dir("osv-sync")?;
         let ecosystem = self.0.ecosystem;
-        let last_modified = self.0.last_modified;
+        let last_modified = self.last_modified();
         let records_dir = self.records_dir();
 
         let client = reqwest::Client::new();
@@ -164,7 +182,10 @@ impl OsvDb {
             std::fs::rename(&tmp_record_path, &record_path)?;
         }
 
-        // self.write_inner().last_modified = new_last_modified;
+        let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
+        self.0
+            .last_modified
+            .store(new_last_modified_timestamp_nanos, Ordering::Release);
         Ok(())
     }
 }
@@ -199,7 +220,7 @@ async fn download_and_extract_osv_archive(
 ///
 /// Must be called after the OSV archive has already been downloaded and extracted into
 /// `path` (i.e. after [`download_and_extract_osv_archive`] has completed successfully).
-fn last_modified(path: impl AsRef<Path>) -> anyhow::Result<DateTime<Utc>> {
+fn scan_last_modified(path: impl AsRef<Path>) -> anyhow::Result<DateTime<Utc>> {
     std::fs::read_dir(path.as_ref())
         .context("failed to read database directory")?
         .filter_map(|entry| {
@@ -228,7 +249,6 @@ fn last_modified(path: impl AsRef<Path>) -> anyhow::Result<DateTime<Utc>> {
 #[cfg(test)]
 mod tests {
     use std::fs::File;
-
     use tempfile::TempDir;
 
     use super::*;
@@ -265,9 +285,11 @@ mod tests {
 
         assert!(osv.get_record(&record_id).unwrap().is_none());
 
-        // osv.write_inner().last_modified = cutoff - Duration::milliseconds(1);
-        // osv.sync().await.unwrap();
+        osv.0
+            .last_modified
+            .store(cutoff.timestamp_nanos_opt().unwrap() - 1, Ordering::Release);
+        osv.sync().await.unwrap();
 
-        // assert!(osv.get_record(&record_id).unwrap().is_some());
+        assert!(osv.get_record(&record_id).unwrap().is_some());
     }
 }
