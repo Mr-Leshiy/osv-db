@@ -265,7 +265,7 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
-    use crate::types::{Ecosystem};
+    use crate::types::Ecosystem;
 
     /// Downloads the latest OSV database, reads `RUSTSEC-2024-0401`, removes all
     /// records modified at or before its `modified` timestamp, then asserts the
@@ -295,7 +295,7 @@ mod tests {
         );
 
         // manipulates internal files, some existing records, to be able to test `sync` method
-         let cutoff = record.modified;
+        let cutoff = record.modified;
         let records_dir = osv.records_dir();
         for entry in std::fs::read_dir(&records_dir).unwrap() {
             let path = entry.unwrap().path();
