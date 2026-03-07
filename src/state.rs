@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 
 use crate::types::OsvRecord;
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct OsvState {
     pub last_modified: DateTime<Utc>,
 }
@@ -19,6 +19,12 @@ impl OsvState {
     /// into `path` (i.e. after [`download_and_extract_osv_archive`] has completed
     /// successfully).
     pub fn build(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        if !path.as_ref().exists() {
+            return Ok(Self {
+                last_modified: DateTime::<Utc>::MIN_UTC,
+            })
+        }
+        
         let last_modified = std::fs::read_dir(path.as_ref())
             .context("failed to read database directory")?
             .filter_map(|entry| {

@@ -53,12 +53,12 @@ impl OsvDb {
             "Provided `path` {} must be a directory",
             path.as_ref().display()
         );
+        let records_dir = path.as_ref().join(RECORDS_DIRECTORY);
+        let state = OsvState::build(records_dir)?;
         Ok(Self(Arc::new(OsvDbInner {
             location: path.as_ref().to_path_buf(),
             ecosystem,
-            state: RwLock::new(OsvState {
-                last_modified: DateTime::<Utc>::MIN_UTC,
-            }),
+            state: RwLock::new(state),
         })))
     }
 
@@ -145,19 +145,17 @@ impl OsvDb {
         let tmp_dir = self.tmp_dir("osv-download")?;
         download_and_extract_osv_archive(self.0.ecosystem.as_ref(), &tmp_dir, chunk_size).await?;
 
-        let new_last_modified = OsvState::build(&tmp_dir)?.last_modified;
         let records_dir = self.records_dir();
+        // acquire lock during all manipulation with the data
+        let mut state = self.write_state();
+        let new_state = OsvState::build(&tmp_dir)?;
         if records_dir.exists() {
             std::fs::remove_dir_all(&records_dir)?;
         }
         // Replaces current records with the latest one
-        //
-        // Dont need to have locks.
-        // Atomic operation in that sense that each file inside the directory could not be in an
-        // intermiary state. <https://man7.org/linux/man-pages/man2/rename.2.html>
         std::fs::rename(&tmp_dir, records_dir)?;
 
-        self.write_state().last_modified = new_last_modified;
+        *state = new_state;
 
         Ok(())
     }
