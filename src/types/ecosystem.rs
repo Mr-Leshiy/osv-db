@@ -9,7 +9,7 @@ pub struct EcosystemWithSuffix(Ecosystem, Option<String>);
 
 /// Represents an OSV ecosystem, as defined by the OSV schema.
 /// See <https://github.com/ossf/osv-schema/blob/main/validation/schema.json>
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Display, EnumString)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Display, EnumString)]
 pub enum Ecosystem {
     #[strum(to_string = "AlmaLinux")]
     AlmaLinux,
