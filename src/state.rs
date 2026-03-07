@@ -1,4 +1,8 @@
-use std::{collections::HashMap, fs::File, path::Path};
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+    path::Path,
+};
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
@@ -8,7 +12,7 @@ use crate::types::{OsvRecord, OsvRecordId, PackageName};
 #[derive(Debug, PartialEq, Eq)]
 pub struct OsvState {
     pub last_modified: DateTime<Utc>,
-    pub affected: HashMap<PackageName, OsvRecordId>,
+    pub affected: HashMap<PackageName, HashSet<OsvRecordId>>,
 }
 
 impl OsvState {
@@ -29,7 +33,7 @@ impl OsvState {
             last_modified: DateTime::<Utc>::MIN_UTC,
             affected: HashMap::new(),
         };
-        
+
         let res = std::fs::read_dir(path.as_ref())
             .context("failed to read database directory")?
             .filter_map(|entry| {
@@ -57,7 +61,10 @@ impl OsvState {
                 if let Some(packages) = &record.affected {
                     for entry in packages {
                         if let Some(package) = &entry.package {
-                            res.affected.insert(package.name.clone(), record.id.clone());
+                            res.affected
+                                .entry(package.name.clone())
+                                .or_default()
+                                .insert(record.id.clone());
                         }
                     }
                 }
@@ -67,11 +74,16 @@ impl OsvState {
         Ok(res)
     }
 
-    /// Merges `other` into `self`: all entries from `other.affected` are inserted into
-    /// `self.affected` (overwriting on key collision), and `self.last_modified` is updated
-    /// to the later of the two timestamps.
-    pub fn merge(&mut self, other: OsvState) {
+    /// Merges `other` into `self`: all record IDs from `other.affected` are merged into
+    /// `self.affected` (unioning per-package sets on key collision), and
+    /// `self.last_modified` is updated to the later of the two timestamps.
+    pub fn merge(
+        &mut self,
+        other: OsvState,
+    ) {
         self.last_modified = self.last_modified.max(other.last_modified);
-        self.affected.extend(other.affected);
+        for (package, record_ids) in other.affected {
+            self.affected.entry(package).or_default().extend(record_ids);
+        }
     }
 }

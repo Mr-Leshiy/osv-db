@@ -6,6 +6,7 @@ mod state;
 pub mod types;
 
 use std::{
+    collections::HashSet,
     fs::File,
     path::{Path, PathBuf},
     sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard},
@@ -81,10 +82,13 @@ impl OsvDb {
         self.read_state().last_modified
     }
 
-    /// Returns the [`OsvRecordId`] of the record associated with the given package name,
-    /// or [`None`] if no record is found for that package.
+    /// Returns the set of [`OsvRecordId`]s associated with the given package name,
+    /// or [`None`] if no records are found for that package.
     #[must_use]
-    pub fn get_record_id(&self, package_name: &PackageName) -> Option<OsvRecordId> {
+    pub fn get_record_id(
+        &self,
+        package_name: &PackageName,
+    ) -> Option<HashSet<OsvRecordId>> {
         self.read_state().affected.get(package_name).cloned()
     }
 
@@ -287,7 +291,10 @@ mod tests {
             .and_then(|a| a.package.as_ref())
             .map(|p| p.name.clone())
             .expect("RUSTSEC-2024-0401 must have at least one affected package");
-        assert_eq!(osv.get_record_id(&package_name), Some(record_id.clone()));
+        assert!(
+            osv.get_record_id(&package_name)
+                .is_some_and(|ids| ids.contains(&record_id))
+        );
 
         // manipulates internal files, some existing records, to be able to test `sync` method
         let records_dir = osv.records_dir();
