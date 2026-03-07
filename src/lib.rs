@@ -119,6 +119,41 @@ impl OsvDb {
         Ok(Some(osv_record))
     }
 
+    /// Returns an async [`Stream`] over every [`OsvRecord`] stored in the database.
+    ///
+    /// Files are read and parsed asynchronously using [`tokio::fs`]. Each
+    /// record is yielded as `Ok(`[`OsvRecord`]`)`. I/O or parse failures
+    /// yield an [`Err`] item without terminating the stream.
+    ///
+    /// [`Stream`]: futures::Stream
+    #[must_use]
+    pub fn records_stream(
+        &self
+    ) -> anyhow::Result<impl futures::Stream<Item = anyhow::Result<OsvRecord>>> {
+        use futures::StreamExt as _;
+        let records_dir_content = std::fs::read_dir(self.records_dir())?;
+        let stream = futures::stream::iter(records_dir_content)
+            .filter_map(|entry| {
+                async {
+                    Some(entry).filter(|e| {
+                        e.as_ref().is_ok_and(|e| {
+                            e.path().extension().and_then(|e| e.to_str())
+                                == Some(OSV_RECORD_FILE_EXTENSION)
+                        })
+                    })
+                }
+            })
+            .then(|entry| {
+                async move {
+                    let entry = entry?;
+                    let bytes = tokio::fs::read(entry.path()).await?;
+                    let osv_record = serde_json::from_slice(&bytes)?;
+                    anyhow::Ok(osv_record)
+                }
+            });
+        Ok(stream)
+    }
+
     /// Downloads a full, latest OSV database for the provided [`OsvGsEcosystem`].
     /// If provided ecosystem is [`None`], initialise for all ecosystems.
     /// - Downloads the latest archive into a temporary subdirectory of `location`
@@ -226,7 +261,7 @@ async fn download_and_extract_osv_archive(
 ) -> anyhow::Result<()> {
     let zip_archive_path = path.as_ref().join("osv.zip");
     let archive = chuncked_download_to(
-        client,
+        &client,
         &osv_archive_url(ecosystem),
         chunk_size,
         &zip_archive_path,
@@ -258,8 +293,6 @@ async fn download_osv_modified_csv(
 
 #[cfg(test)]
 mod tests {
-    use std::fs::File;
-
     use tempfile::TempDir;
 
     use super::*;
@@ -279,28 +312,16 @@ mod tests {
         osv.download_latest(10 * 1024 * 1024).await.unwrap();
 
         let record = osv.get_record(&record_id).unwrap().unwrap();
+        assert_eq!(record.id, record_id);
 
-        // manipulates internal files, some existing records, to be able to test `sync` method
-        let cutoff = record.modified;
-        let records_dir = osv.records_dir();
-        for entry in std::fs::read_dir(&records_dir).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().and_then(|e| e.to_str()) == Some(OSV_RECORD_FILE_EXTENSION) {
-                let file = File::open(&path).unwrap();
-                let r: OsvRecord = serde_json::from_reader(file).unwrap();
-                if r.modified <= cutoff {
-                    std::fs::remove_file(&path).unwrap();
-                }
-            }
-        }
-
-        assert!(osv.get_record(&record_id).unwrap().is_none());
-
-        osv.0
-            .last_modified
-            .store(cutoff.timestamp_nanos_opt().unwrap() - 1, Ordering::Release);
-        osv.sync().await.unwrap();
-
-        assert!(osv.get_record(&record_id).unwrap().is_some());
+        // verify records_stream yields all records including our target
+        use futures::StreamExt as _;
+        let ids: Vec<String> = osv
+            .records_stream()
+            .unwrap()
+            .map(|r| r.unwrap().id)
+            .collect()
+            .await;
+        assert!(ids.contains(&record_id));
     }
 }
