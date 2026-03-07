@@ -20,15 +20,13 @@ impl OsvState {
     /// into `path` (i.e. after [`download_and_extract_osv_archive`] has completed
     /// successfully).
     pub fn build(path: impl AsRef<Path>) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            path.as_ref().is_dir(),
-            "Provided `path` {} must be a directory and exists",
-            path.as_ref().display()
-        );
         let res = Self {
             last_modified: DateTime::<Utc>::MIN_UTC,
             affected: HashMap::new(),
         };
+        if !path.as_ref().exists() {
+            return Ok(res);
+        }
 
         let res = std::fs::read_dir(path.as_ref())
             .context("failed to read database directory")?
@@ -65,5 +63,13 @@ impl OsvState {
             })?;
 
         Ok(res)
+    }
+
+    /// Merges `other` into `self`: all entries from `other.affected` are inserted into
+    /// `self.affected` (overwriting on key collision), and `self.last_modified` is updated
+    /// to the later of the two timestamps.
+    pub fn merge(&mut self, other: OsvState) {
+        self.last_modified = self.last_modified.max(other.last_modified);
+        self.affected.extend(other.affected);
     }
 }

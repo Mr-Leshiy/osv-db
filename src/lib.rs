@@ -218,7 +218,7 @@ impl OsvDb {
             std::fs::rename(entry.path(), records_dir.join(entry.file_name()))?;
         }
 
-        *state = new_state;
+        state.merge(new_state);
         Ok(())
     }
 }
