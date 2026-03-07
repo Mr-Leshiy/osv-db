@@ -5,6 +5,7 @@ A Rust library for downloading and querying the [OSV (Open Source Vulnerabilitie
 ## Overview
 
 `osv-db` fetches vulnerability data from the [OSV Google Cloud Storage](https://storage.googleapis.com/osv-vulnerabilities) and stores it on disk as JSON files. It supports scoping the database to a single ecosystem (e.g. `crates.io`, `PyPI`, `npm`) or working across all ecosystems at once.
+Official [OSV Documentation](https://google.github.io/osv.dev/).
 
 ## Features
 
