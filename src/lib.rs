@@ -2,6 +2,7 @@
 
 mod downloader;
 mod osv_gs;
+mod state;
 pub mod types;
 
 use std::{
@@ -19,6 +20,7 @@ use chrono::{DateTime, Utc};
 use crate::{
     downloader::{chuncked_download_to, simple_download_to},
     osv_gs::{osv_archive_url, osv_modified_id_csv_url, osv_record_url},
+    state::OsvState,
     types::{Ecosystem, OsvModifiedRecord, OsvRecord, OsvRecordId},
 };
 
@@ -122,11 +124,14 @@ impl OsvDb {
     /// - Scans all `.json` files in `location`, deserializes them as [`OsvRecord`]s, and
     ///   updates `self.last_modified` field with the maximum [`OsvRecord::modified`]
     ///   timestamp found across all records.
-    pub async fn download_latest(&self) -> anyhow::Result<()> {
+    pub async fn download_latest(
+        &self,
+        chunk_size: u64,
+    ) -> anyhow::Result<()> {
         let tmp_dir = self.tmp_dir("osv-download")?;
-        download_and_extract_osv_archive(self.0.ecosystem.as_ref(), &tmp_dir).await?;
+        download_and_extract_osv_archive(self.0.ecosystem.as_ref(), &tmp_dir, chunk_size).await?;
 
-        let new_last_modified = scan_last_modified(&tmp_dir)?;
+        let new_last_modified = OsvState::build(&tmp_dir)?.last_modified;
         let records_dir = self.records_dir();
         if records_dir.exists() {
             std::fs::remove_dir_all(&records_dir)?;
@@ -215,15 +220,14 @@ impl OsvDb {
 async fn download_and_extract_osv_archive(
     ecosystem: Option<&Ecosystem>,
     path: impl AsRef<Path>,
+    chunk_size: u64,
 ) -> anyhow::Result<()> {
-    const CHUNK_SIZE: u64 = 10 * 1024 * 1024; // 10 MB
-
     let client = reqwest::Client::new();
     let zip_archive_path = path.as_ref().join("osv.zip");
     let archive = chuncked_download_to(
         &client,
         &osv_archive_url(ecosystem),
-        CHUNK_SIZE,
+        chunk_size,
         &zip_archive_path,
     )
     .await?;
@@ -233,37 +237,6 @@ async fn download_and_extract_osv_archive(
     std::fs::remove_file(&zip_archive_path)?;
 
     Ok(())
-}
-
-/// Scans all `.json` files in `path`, deserializes them as [`OsvRecord`]s, and returns
-/// the maximum [`OsvRecord::modified`] timestamp found across all records.
-///
-/// Must be called after the OSV archive has already been downloaded and extracted into
-/// `path` (i.e. after [`download_and_extract_osv_archive`] has completed successfully).
-fn scan_last_modified(path: impl AsRef<Path>) -> anyhow::Result<DateTime<Utc>> {
-    std::fs::read_dir(path.as_ref())
-        .context("failed to read database directory")?
-        .filter_map(|entry| {
-            match entry {
-                Ok(entry) => {
-                    let path = entry.path();
-                    if path.extension()?.to_str()? == OSV_RECORD_FILE_EXTENSION {
-                        Some(anyhow::Ok(path))
-                    } else {
-                        None
-                    }
-                },
-                Err(err) => Some(Err(err.into())),
-            }
-        })
-        .try_fold(DateTime::<Utc>::MIN_UTC, |max, path| {
-            let path = path?;
-            let file =
-                File::open(&path).with_context(|| format!("failed to open {}", path.display()))?;
-            let record: OsvRecord = serde_json::from_reader(file)
-                .with_context(|| format!("failed to deserialize {}", path.display()))?;
-            Ok(max.max(record.modified))
-        })
 }
 
 #[cfg(test)]
@@ -287,7 +260,7 @@ mod tests {
         let record_id = "RUSTSEC-2024-0401".to_string();
         assert!(osv.get_record(&record_id).unwrap().is_none());
 
-        osv.download_latest().await.unwrap();
+        osv.download_latest(10 * 1024 * 1024).await.unwrap();
 
         let record = osv.get_record(&record_id).unwrap().unwrap();
         let cutoff = record.modified;
