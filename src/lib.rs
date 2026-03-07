@@ -17,7 +17,7 @@ use crate::{
     downloader::{chuncked_download_to, simple_download_to},
     osv_gs::{osv_archive_url, osv_modified_id_csv_url, osv_record_url},
     state::OsvState,
-    types::{Ecosystem, OsvModifiedRecord, OsvRecord, OsvRecordId},
+    types::{Ecosystem, OsvModifiedRecord, OsvRecord, OsvRecordId, PackageName},
 };
 
 const OSV_RECORD_FILE_EXTENSION: &str = "json";
@@ -79,6 +79,13 @@ impl OsvDb {
     #[must_use]
     pub fn last_modified(&self) -> DateTime<Utc> {
         self.read_state().last_modified
+    }
+
+    /// Returns the [`OsvRecordId`] of the record associated with the given package name,
+    /// or [`None`] if no record is found for that package.
+    #[must_use]
+    pub fn get_record_id(&self, package_name: &PackageName) -> Option<OsvRecordId> {
+        self.read_state().affected.get(package_name).cloned()
     }
 
     /// Returns a read guard for [`OsvState`].
@@ -273,6 +280,16 @@ mod tests {
         let record = osv.get_record(&record_id).unwrap().unwrap();
         let cutoff = record.modified;
 
+        let package_name = record
+            .affected
+            .as_ref()
+            .and_then(|v| v.first())
+            .and_then(|a| a.package.as_ref())
+            .map(|p| p.name.clone())
+            .expect("RUSTSEC-2024-0401 must have at least one affected package");
+        assert_eq!(osv.get_record_id(&package_name), Some(record_id.clone()));
+
+        // manipulates internal files, some existing records, to be able to test `sync` method
         let records_dir = osv.records_dir();
         for entry in std::fs::read_dir(&records_dir).unwrap() {
             let path = entry.unwrap().path();
