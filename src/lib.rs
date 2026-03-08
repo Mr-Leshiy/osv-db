@@ -130,7 +130,6 @@ impl OsvDb {
     pub fn records_stream(
         &self
     ) -> anyhow::Result<impl futures::Stream<Item = anyhow::Result<OsvRecord>>> {
-        use futures::StreamExt as _;
         let records_dir_content = std::fs::read_dir(self.records_dir())?;
         let stream = futures::stream::iter(records_dir_content)
             .filter_map(|entry| {
@@ -151,7 +150,7 @@ impl OsvDb {
                     anyhow::Ok(osv_record)
                 }
             });
-        Ok(stream)
+        Ok(stream.boxed())
     }
 
     /// Downloads a full, latest OSV database for the provided [`OsvGsEcosystem`].
@@ -264,7 +263,7 @@ impl OsvDb {
             }
         });
 
-        Ok(stream)
+        Ok(stream.boxed())
     }
 }
 

@@ -20,6 +20,7 @@ Official [OSV Documentation](https://google.github.io/osv.dev/).
 ```rust
 use osv_db::{OsvDb, OsvGsEcosystem};
 use tempfile::TempDir;
+use futures::TryStreamExt;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -35,9 +36,9 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Sync only new/updated records since last download
-    let mut stream = db.sync().await?;
-    while let Some(record) = futures::StreamExt::next(&mut stream).await {
-        println!("Updated: {}", record?.id);
+    let mut stream = db.sync().await.unwrap();
+    while let Some(record) = stream.try_next().await? {
+        println!("Updated: {}", record.id);
     }
 
     Ok(())
