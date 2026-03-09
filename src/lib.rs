@@ -17,7 +17,7 @@ use std::{
 use anyhow::Context;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 
 pub use crate::osv_gs::OsvGsEcosystem;
 use crate::{
@@ -28,6 +28,7 @@ use crate::{
 
 const OSV_RECORD_FILE_EXTENSION: &str = "json";
 const RECORDS_DIRECTORY: &str = "records";
+const SYNC_CONCURRENCY: usize = 10;
 
 #[derive(Debug, Clone)]
 pub struct OsvDb(Arc<OsvDbInner>);
@@ -219,36 +220,57 @@ impl OsvDb {
 
         let client = reqwest::Client::new();
         let mut csv_rdr = download_osv_modified_csv(&client, ecosystem.as_ref()).await?;
+
+        // Collect all records that need to be downloaded before spawning concurrent tasks.
         let mut new_last_modified = last_modified;
+        let mut entries_to_download = Vec::new();
         for result in csv_rdr.records() {
             let entry = OsvModifiedRecord::try_from_csv_record(&result?, ecosystem)?;
             if entry.modified <= last_modified {
                 break;
             }
             new_last_modified = new_last_modified.max(entry.modified);
-
-            let mut record_filename = PathBuf::from(&entry.id);
-            record_filename.add_extension(OSV_RECORD_FILE_EXTENSION);
-
-            simple_download_to(
-                &client,
-                &osv_record_url(Some(&entry.ecosystem), &entry.id),
-                &tmp_dir.path().join(&record_filename),
-            )
-            .await?;
+            entries_to_download.push(entry);
         }
+
+        // Concurrently download all records.
+        futures::stream::iter(entries_to_download)
+            .map(|entry| {
+                let client = client.clone();
+                let tmp_path = tmp_dir.path().to_path_buf();
+                async move {
+                    let mut record_filename = PathBuf::from(&entry.id);
+                    record_filename.add_extension(OSV_RECORD_FILE_EXTENSION);
+                    simple_download_to(
+                        &client,
+                        &osv_record_url(Some(&entry.ecosystem), &entry.id),
+                        &tmp_path.join(&record_filename),
+                    )
+                    .await?;
+                    anyhow::Ok(())
+                }
+            })
+            .buffer_unordered(SYNC_CONCURRENCY)
+            .try_collect::<Vec<_>>()
+            .await?;
 
         let records_dir = self.records_dir();
-        let mut new_record_paths = Vec::new();
-        for entry in std::fs::read_dir(tmp_dir.path())? {
-            let entry = entry?;
-            let dest = records_dir.join(entry.file_name());
-            // Atomically replaces the current records directory with the newly downloaded one.
-            // rename(2) is guaranteed to be atomic on POSIX systems — see
-            // <https://man7.org/linux/man-pages/man2/rename.2.html>.
-            std::fs::rename(entry.path(), &dest)?;
-            new_record_paths.push(dest);
-        }
+        let dir_entries: Vec<_> =
+            std::fs::read_dir(tmp_dir.path())?.collect::<Result<_, _>>()?;
+        let new_record_paths: Vec<PathBuf> = futures::stream::iter(dir_entries)
+            .map(|entry| {
+                let dest = records_dir.join(entry.file_name());
+                async move {
+                    // Atomically replaces the current records directory with the newly downloaded one.
+                    // rename(2) is guaranteed to be atomic on POSIX systems — see
+                    // <https://man7.org/linux/man-pages/man2/rename.2.html>.
+                    tokio::fs::rename(entry.path(), &dest).await?;
+                    anyhow::Ok(dest)
+                }
+            })
+            .buffer_unordered(SYNC_CONCURRENCY)
+            .try_collect()
+            .await?;
 
         let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
         self.0
