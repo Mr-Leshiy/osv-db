@@ -17,7 +17,7 @@ use std::{
 use anyhow::Context;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 
 pub use crate::osv_gs::OsvGsEcosystem;
 use crate::{
@@ -28,6 +28,7 @@ use crate::{
 
 const OSV_RECORD_FILE_EXTENSION: &str = "json";
 const RECORDS_DIRECTORY: &str = "records";
+const SYNC_CONCURRENCY: usize = 10;
 
 #[derive(Debug, Clone)]
 pub struct OsvDb(Arc<OsvDbInner>);
@@ -219,36 +220,64 @@ impl OsvDb {
 
         let client = reqwest::Client::new();
         let mut csv_rdr = download_osv_modified_csv(&client, ecosystem.as_ref()).await?;
+
+        // Collect all records that need to be downloaded before spawning concurrent tasks.
         let mut new_last_modified = last_modified;
+        let mut entries_to_download = Vec::new();
         for result in csv_rdr.records() {
             let entry = OsvModifiedRecord::try_from_csv_record(&result?, ecosystem)?;
             if entry.modified <= last_modified {
                 break;
             }
             new_last_modified = new_last_modified.max(entry.modified);
-
-            let mut record_filename = PathBuf::from(&entry.id);
-            record_filename.add_extension(OSV_RECORD_FILE_EXTENSION);
-
-            simple_download_to(
-                &client,
-                &osv_record_url(Some(&entry.ecosystem), &entry.id),
-                &tmp_dir.path().join(&record_filename),
-            )
-            .await?;
+            entries_to_download.push(entry);
         }
+
+        // Concurrently download all records.
+        futures::stream::iter(entries_to_download)
+            .map(|entry| {
+                let client = client.clone();
+                let tmp_path = tmp_dir.path().to_path_buf();
+                async move {
+                    let mut record_filename = PathBuf::from(&entry.id);
+                    record_filename.add_extension(OSV_RECORD_FILE_EXTENSION);
+                    simple_download_to(
+                        &client,
+                        &osv_record_url(Some(&entry.ecosystem), &entry.id),
+                        &tmp_path.join(&record_filename),
+                    )
+                    .await?;
+                    anyhow::Ok(())
+                }
+            })
+            .buffer_unordered(SYNC_CONCURRENCY)
+            .try_collect::<Vec<_>>()
+            .await?;
 
         let records_dir = self.records_dir();
-        let mut new_record_paths = Vec::new();
-        for entry in std::fs::read_dir(tmp_dir.path())? {
-            let entry = entry?;
-            let dest = records_dir.join(entry.file_name());
-            // Atomically replaces the current records directory with the newly downloaded one.
-            // rename(2) is guaranteed to be atomic on POSIX systems — see
-            // <https://man7.org/linux/man-pages/man2/rename.2.html>.
-            std::fs::rename(entry.path(), &dest)?;
-            new_record_paths.push(dest);
+        if !records_dir.exists() {
+            std::fs::create_dir(&records_dir)?;
         }
+        let new_record_paths: Vec<PathBuf> =
+            futures::stream::iter(std::fs::read_dir(tmp_dir.path())?)
+                .map({
+                    |entry| {
+                        let records_dir = records_dir.clone();
+                        async move {
+                            let entry = entry?;
+                            let dest = records_dir.join(entry.file_name());
+
+                            // Atomically replaces the current records directory with the newly
+                            // downloaded one. rename(2) is guaranteed
+                            // to be atomic on POSIX systems — see <https://man7.org/linux/man-pages/man2/rename.2.html>.
+                            tokio::fs::rename(entry.path(), &dest).await?;
+                            anyhow::Ok(dest)
+                        }
+                    }
+                })
+                .buffer_unordered(SYNC_CONCURRENCY)
+                .try_collect()
+                .await?;
 
         let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
         self.0
@@ -309,6 +338,9 @@ async fn download_osv_modified_csv(
 
 #[cfg(test)]
 mod tests {
+    use std::{collections::HashSet, sync::atomic::Ordering};
+
+    use futures::StreamExt;
     use tempfile::TempDir;
 
     use super::*;
@@ -318,7 +350,7 @@ mod tests {
     /// record no longer exists. Then calls sync to re-download it and asserts it
     /// is present again.
     #[tokio::test]
-    async fn simple_roundtrip() {
+    async fn download_latest_test() {
         let tmp = TempDir::new().unwrap();
         let osv = OsvDb::new(Some(OsvGsEcosystem::CratesIo), tmp.path()).unwrap();
 
@@ -338,5 +370,70 @@ mod tests {
             .collect()
             .await;
         assert!(ids.contains(&record_id));
+    }
+
+    /// Initialises an empty database, sets `last_modified` to the date of
+    /// `RUSTSEC-2026-0032` (2026-03-05T00:00:00Z), then calls `sync`. Verifies:
+    ///
+    /// 1. `RUSTSEC-2026-0032` was not present before sync.
+    /// 2. `RUSTSEC-2026-0032` exists after sync (it was modified at 2026-03-05T05:53:11Z,
+    ///    which is strictly after the `last_modified` cutoff).
+    /// 3. Every record returned by the `sync` stream is also present in `records_stream`.
+    /// 4. Every record returned by the `sync` stream has `modified >= last_modified`.
+    #[tokio::test]
+    async fn sync_test() {
+        // The date of RUSTSEC-2026-0032 (modified: 2026-03-05T05:53:11Z).
+        // Using midnight so the record itself (modified later that day) is captured.
+        let last_modified: DateTime<Utc> = "2026-03-05T00:00:00Z".parse().unwrap();
+
+        let tmp = TempDir::new().unwrap();
+        let osv = OsvDb::new(Some(OsvGsEcosystem::CratesIo), tmp.path()).unwrap();
+
+        let record_id = "RUSTSEC-2026-0032".to_string();
+
+        // DB is empty — record must not exist yet.
+        assert!(osv.get_record(&record_id).unwrap().is_none());
+
+        // Set last_modified to the date of RUSTSEC-2026-0032.
+        osv.0.last_modified.store(
+            last_modified.timestamp_nanos_opt().unwrap(),
+            Ordering::Release,
+        );
+
+        let sync_records: Vec<OsvRecord> = osv
+            .sync()
+            .await
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+            .await;
+
+        // RUSTSEC-2026-0032 must be present after sync.
+        assert!(
+            osv.get_record(&record_id).unwrap().is_some(),
+            "RUSTSEC-2026-0032 should exist after sync"
+        );
+
+        let stream_ids: HashSet<String> = osv
+            .records_stream()
+            .unwrap()
+            .map(|r| r.unwrap().id)
+            .collect()
+            .await;
+
+        for sync_record in &sync_records {
+            assert!(
+                stream_ids.contains(&sync_record.id),
+                "sync record {} is missing from records_stream",
+                sync_record.id
+            );
+            assert!(
+                sync_record.modified >= last_modified,
+                "sync record {} has modified {} which is before last_modified {}",
+                sync_record.id,
+                sync_record.modified,
+                last_modified
+            );
+        }
     }
 }
