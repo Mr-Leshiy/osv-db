@@ -255,6 +255,9 @@ impl OsvDb {
             .await?;
 
         let records_dir = self.records_dir();
+        if !records_dir.exists() {
+            std::fs::create_dir(&records_dir)?;
+        }
         let new_record_paths: Vec<PathBuf> =
             futures::stream::iter(std::fs::read_dir(tmp_dir.path())?)
                 .map({
@@ -335,6 +338,10 @@ async fn download_osv_modified_csv(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+    use std::sync::atomic::Ordering;
+
+    use futures::StreamExt;
     use tempfile::TempDir;
 
     use super::*;
@@ -344,7 +351,7 @@ mod tests {
     /// record no longer exists. Then calls sync to re-download it and asserts it
     /// is present again.
     #[tokio::test]
-    async fn simple_roundtrip() {
+    async fn download_latest_test() {
         let tmp = TempDir::new().unwrap();
         let osv = OsvDb::new(Some(OsvGsEcosystem::CratesIo), tmp.path()).unwrap();
 
@@ -364,5 +371,70 @@ mod tests {
             .collect()
             .await;
         assert!(ids.contains(&record_id));
+    }
+
+    /// Initialises an empty database, sets `last_modified` to the date of
+    /// `RUSTSEC-2026-0032` (2026-03-05T00:00:00Z), then calls `sync`. Verifies:
+    ///
+    /// 1. `RUSTSEC-2026-0032` was not present before sync.
+    /// 2. `RUSTSEC-2026-0032` exists after sync (it was modified at 2026-03-05T05:53:11Z,
+    ///    which is strictly after the `last_modified` cutoff).
+    /// 3. Every record returned by the `sync` stream is also present in `records_stream`.
+    /// 4. Every record returned by the `sync` stream has `modified >= last_modified`.
+    #[tokio::test]
+    async fn sync_test() {
+        // The date of RUSTSEC-2026-0032 (modified: 2026-03-05T05:53:11Z).
+        // Using midnight so the record itself (modified later that day) is captured.
+        let last_modified: DateTime<Utc> =
+            "2026-03-05T00:00:00Z".parse().unwrap();
+
+        let tmp = TempDir::new().unwrap();
+        let osv = OsvDb::new(Some(OsvGsEcosystem::CratesIo), tmp.path()).unwrap();
+
+        let record_id = "RUSTSEC-2026-0032".to_string();
+
+        // DB is empty — record must not exist yet.
+        assert!(osv.get_record(&record_id).unwrap().is_none());
+
+        // Set last_modified to the date of RUSTSEC-2026-0032.
+        osv.0
+            .last_modified
+            .store(last_modified.timestamp_nanos_opt().unwrap(), Ordering::Release);
+
+        let sync_records: Vec<OsvRecord> = osv
+            .sync()
+            .await
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect()
+            .await;
+
+        // RUSTSEC-2026-0032 must be present after sync.
+        assert!(
+            osv.get_record(&record_id).unwrap().is_some(),
+            "RUSTSEC-2026-0032 should exist after sync"
+        );
+
+        let stream_ids: HashSet<String> = osv
+            .records_stream()
+            .unwrap()
+            .map(|r| r.unwrap().id)
+            .collect()
+            .await;
+
+        for sync_record in &sync_records {
+            assert!(
+                stream_ids.contains(&sync_record.id),
+                "sync record {} is missing from records_stream",
+                sync_record.id
+            );
+            assert!(
+                sync_record.modified >= last_modified,
+                "sync record {} has modified {} which is before last_modified {}",
+                sync_record.id,
+                sync_record.modified,
+                last_modified
+            );
+        }
     }
 }
