@@ -338,8 +338,7 @@ async fn download_osv_modified_csv(
 
 #[cfg(test)]
 mod tests {
-    use std::collections::HashSet;
-    use std::sync::atomic::Ordering;
+    use std::{collections::HashSet, sync::atomic::Ordering};
 
     use futures::StreamExt;
     use tempfile::TempDir;
@@ -385,8 +384,7 @@ mod tests {
     async fn sync_test() {
         // The date of RUSTSEC-2026-0032 (modified: 2026-03-05T05:53:11Z).
         // Using midnight so the record itself (modified later that day) is captured.
-        let last_modified: DateTime<Utc> =
-            "2026-03-05T00:00:00Z".parse().unwrap();
+        let last_modified: DateTime<Utc> = "2026-03-05T00:00:00Z".parse().unwrap();
 
         let tmp = TempDir::new().unwrap();
         let osv = OsvDb::new(Some(OsvGsEcosystem::CratesIo), tmp.path()).unwrap();
@@ -397,9 +395,10 @@ mod tests {
         assert!(osv.get_record(&record_id).unwrap().is_none());
 
         // Set last_modified to the date of RUSTSEC-2026-0032.
-        osv.0
-            .last_modified
-            .store(last_modified.timestamp_nanos_opt().unwrap(), Ordering::Release);
+        osv.0.last_modified.store(
+            last_modified.timestamp_nanos_opt().unwrap(),
+            Ordering::Release,
+        );
 
         let sync_records: Vec<OsvRecord> = osv
             .sync()
