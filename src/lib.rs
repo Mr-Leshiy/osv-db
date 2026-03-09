@@ -255,22 +255,26 @@ impl OsvDb {
             .await?;
 
         let records_dir = self.records_dir();
-        let dir_entries: Vec<_> =
-            std::fs::read_dir(tmp_dir.path())?.collect::<Result<_, _>>()?;
-        let new_record_paths: Vec<PathBuf> = futures::stream::iter(dir_entries)
-            .map(|entry| {
-                let dest = records_dir.join(entry.file_name());
-                async move {
-                    // Atomically replaces the current records directory with the newly downloaded one.
-                    // rename(2) is guaranteed to be atomic on POSIX systems — see
-                    // <https://man7.org/linux/man-pages/man2/rename.2.html>.
-                    tokio::fs::rename(entry.path(), &dest).await?;
-                    anyhow::Ok(dest)
-                }
-            })
-            .buffer_unordered(SYNC_CONCURRENCY)
-            .try_collect()
-            .await?;
+        let new_record_paths: Vec<PathBuf> =
+            futures::stream::iter(std::fs::read_dir(tmp_dir.path())?)
+                .map({
+                    |entry| {
+                        let records_dir = records_dir.clone();
+                        async move {
+                            let entry = entry?;
+                            let dest = records_dir.join(entry.file_name());
+
+                            // Atomically replaces the current records directory with the newly
+                            // downloaded one. rename(2) is guaranteed
+                            // to be atomic on POSIX systems — see <https://man7.org/linux/man-pages/man2/rename.2.html>.
+                            tokio::fs::rename(entry.path(), &dest).await?;
+                            anyhow::Ok(dest)
+                        }
+                    }
+                })
+                .buffer_unordered(SYNC_CONCURRENCY)
+                .try_collect()
+                .await?;
 
         let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
         self.0
