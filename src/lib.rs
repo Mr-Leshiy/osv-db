@@ -220,32 +220,8 @@ impl OsvDb {
         let client = reqwest::Client::new();
 
         // Collect all records that need to be downloaded before spawning concurrent tasks.
-        // Each ecosystem's modified_id.csv is sorted in reverse chronological order, so
-        // we stop reading as soon as we reach an entry at or before last_modified.
-        let mut new_last_modified = last_modified;
-        let mut entries_to_download = Vec::new();
-
-        if self.0.ecosystems.is_all() {
-            collect_entries_from_csv(
-                &client,
-                None,
-                last_modified,
-                &mut new_last_modified,
-                &mut entries_to_download,
-            )
-            .await?;
-        } else {
-            for eco in self.0.ecosystems.iter() {
-                collect_entries_from_csv(
-                    &client,
-                    Some(eco),
-                    last_modified,
-                    &mut new_last_modified,
-                    &mut entries_to_download,
-                )
-                .await?;
-            }
-        }
+        let (new_last_modified, entries_to_download) =
+            collect_modified_entries(&client, &self.0.ecosystems, last_modified).await?;
 
         // Concurrently download all records.
         futures::stream::iter(entries_to_download)
@@ -326,33 +302,68 @@ async fn download_latest_archives(
     path: impl AsRef<Path>,
     chunk_size: u64,
 ) -> anyhow::Result<DateTime<Utc>> {
+    let mut max_modified = DateTime::<Utc>::from_timestamp_nanos(0);
     if ecosystems.is_all() {
-        download_and_extract_osv_archive(client, None, &path, chunk_size).await?;
-        let mut csv_rdr = download_osv_modified_csv(client, None).await?;
-        let first_record = csv_rdr
-            .records()
-            .next()
-            .context("OSV modified csv file must have at least one entry")?;
-        Ok(OsvModifiedRecord::try_from_csv_record(&first_record?, None)?.modified)
+        max_modified = download_archive_for_ecosystem(client, None, &path, chunk_size).await?;
     } else {
-        let mut max_modified = DateTime::<Utc>::from_timestamp_nanos(0);
         for eco in ecosystems.iter() {
-            download_and_extract_osv_archive(client, Some(eco), &path, chunk_size).await?;
-            let mut csv_rdr = download_osv_modified_csv(client, Some(eco)).await?;
-            let first_record = csv_rdr
-                .records()
-                .next()
-                .context("OSV modified csv file must have at least one entry")?;
-            let entry = OsvModifiedRecord::try_from_csv_record(&first_record?, Some(*eco))?;
-            max_modified = max_modified.max(entry.modified);
+            let modified =
+                download_archive_for_ecosystem(client, Some(eco), &path, chunk_size).await?;
+            max_modified = max_modified.max(modified);
         }
-        Ok(max_modified)
     }
+    Ok(max_modified)
+}
+
+/// Downloads and extracts the OSV archive for the given `ecosystem` (or the global
+/// archive if [`None`]) into `path`, then reads the first entry of the
+/// `modified_id.csv` and returns its `modified` timestamp.
+async fn download_archive_for_ecosystem(
+    client: &reqwest::Client,
+    ecosystem: Option<&OsvGsEcosystem>,
+    path: impl AsRef<Path>,
+    chunk_size: u64,
+) -> anyhow::Result<DateTime<Utc>> {
+    download_and_extract_osv_archive(client, ecosystem, &path, chunk_size).await?;
+    let mut csv_rdr = download_osv_modified_csv(client, ecosystem).await?;
+    let first_record = csv_rdr
+        .records()
+        .next()
+        .context("OSV modified csv file must have at least one entry")?;
+    let entry = OsvModifiedRecord::try_from_csv_record(&first_record?, ecosystem.copied())?;
+    Ok(entry.modified)
+}
+
+/// Reads the `modified_id.csv` for each ecosystem in `ecosystems` and collects every
+/// entry whose `modified` timestamp is strictly after `since`.
+///
+/// Each CSV is sorted in reverse chronological order, so reading stops as soon as an
+/// entry at or before `since` is encountered.
+///
+/// Returns the updated maximum `modified` timestamp and the list of entries to download.
+async fn collect_modified_entries(
+    client: &reqwest::Client,
+    ecosystems: &OsvGsEcosystems,
+    since: DateTime<Utc>,
+) -> anyhow::Result<(DateTime<Utc>, Vec<OsvModifiedRecord>)> {
+    let mut new_last_modified = since;
+    let mut entries = Vec::new();
+    if ecosystems.is_all() {
+        (new_last_modified, entries) = collect_entries_from_csv(client, None, since).await?;
+    } else {
+        for eco in ecosystems.iter() {
+            let (modified, eco_entries) =
+                collect_entries_from_csv(client, Some(eco), since).await?;
+            new_last_modified = new_last_modified.max(modified);
+            entries.extend(eco_entries);
+        }
+    }
+    Ok((new_last_modified, entries))
 }
 
 /// Downloads and reads the `modified_id.csv` for the given `ecosystem` (or the global
-/// index if [`None`]) and appends every entry whose `modified` timestamp is strictly
-/// after `since` to `entries`, updating `new_last_modified` with the maximum seen.
+/// index if [`None`]) and returns every entry whose `modified` timestamp is strictly
+/// after `since`, along with the maximum `modified` timestamp seen.
 ///
 /// The CSV is sorted in reverse chronological order, so reading stops as soon as an
 /// entry at or before `since` is encountered.
@@ -360,19 +371,19 @@ async fn collect_entries_from_csv(
     client: &reqwest::Client,
     ecosystem: Option<&OsvGsEcosystem>,
     since: DateTime<Utc>,
-    new_last_modified: &mut DateTime<Utc>,
-    entries: &mut Vec<OsvModifiedRecord>,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<(DateTime<Utc>, Vec<OsvModifiedRecord>)> {
+    let mut new_last_modified = since;
+    let mut entries = Vec::new();
     let mut csv_rdr = download_osv_modified_csv(client, ecosystem).await?;
     for result in csv_rdr.records() {
         let entry = OsvModifiedRecord::try_from_csv_record(&result?, ecosystem.copied())?;
         if entry.modified <= since {
             break;
         }
-        *new_last_modified = (*new_last_modified).max(entry.modified);
+        new_last_modified = new_last_modified.max(entry.modified);
         entries.push(entry);
     }
-    Ok(())
+    Ok((new_last_modified, entries))
 }
 
 /// Downloads the OSV archive for the given [`OsvGsEcosystem`] (or all ecosystems if
