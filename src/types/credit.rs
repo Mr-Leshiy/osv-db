@@ -6,7 +6,8 @@ pub struct Credit {
     /// Name of the credited person or organization.
     pub name: String,
     /// Contact URIs or handles for the credited party.
-    pub contact: Option<Vec<String>>,
+    #[serde(default)]
+    pub contact: Vec<String>,
     /// The role this party played.
     #[serde(rename = "type")]
     pub credit_type: Option<CreditType>,

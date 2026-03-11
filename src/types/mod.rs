@@ -37,11 +37,14 @@ pub struct OsvRecord {
     /// ISO 8601 timestamp when the record was withdrawn, if applicable.
     pub withdrawn: Option<DateTime<Utc>>,
     /// Alternative identifiers (e.g. CVE IDs) for the same vulnerability.
-    pub aliases: Option<Vec<String>>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
     /// Related vulnerability IDs that are not direct aliases.
-    pub related: Option<Vec<String>>,
+    #[serde(default)]
+    pub related: Vec<String>,
     /// Upstream vulnerability references.
-    pub upstream: Option<Vec<String>>,
+    #[serde(default)]
+    pub upstream: Vec<String>,
     /// Brief, one-line description of the vulnerability.
     pub summary: Option<String>,
     /// Full description of the vulnerability (may use Markdown).
@@ -49,13 +52,17 @@ pub struct OsvRecord {
     /// Severity ratings at the root level.
     ///
     /// When present, per-package severity in [`Affected`] must be `null`.
-    pub severity: Option<Vec<Severity>>,
+    #[serde(default)]
+    pub severity: Vec<Severity>,
     /// Packages and version ranges affected by this vulnerability.
-    pub affected: Option<Vec<Affected>>,
+    #[serde(default)]
+    pub affected: Vec<Affected>,
     /// External references (advisories, fixes, articles, etc.).
-    pub references: Option<Vec<Reference>>,
+    #[serde(default)]
+    pub references: Vec<Reference>,
     /// Credits for people or organizations involved in the report.
-    pub credits: Option<Vec<Credit>>,
+    #[serde(default)]
+    pub credits: Vec<Credit>,
     /// Arbitrary database-specific data.
     pub database_specific: Option<Value>,
 }
