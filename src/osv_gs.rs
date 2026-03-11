@@ -124,11 +124,28 @@ impl OsvGsEcosystems {
         Self(Vec::new())
     }
 
+    /// Returns `true` if no specific ecosystems have been selected, meaning all
+    /// ecosystems are targeted.
+    #[must_use]
+    pub fn is_all(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Iterates over the explicitly selected ecosystems.
+    ///
+    /// Returns an empty iterator when [`OsvGsEcosystems::is_all`] is `true`.
+    pub fn iter(&self) -> impl Iterator<Item = &OsvGsEcosystem> {
+        self.0.iter()
+    }
+
     /// Add an [`OsvGsEcosystem`] to the set. Once at least one ecosystem is added,
     /// only the ecosystems explicitly listed are targeted — the implicit "all ecosystems"
     /// behaviour no longer applies.
     #[must_use]
-    pub fn add(mut self, ecosystem: OsvGsEcosystem) -> Self {
+    pub fn add(
+        mut self,
+        ecosystem: OsvGsEcosystem,
+    ) -> Self {
         self.0.push(ecosystem);
         self
     }
