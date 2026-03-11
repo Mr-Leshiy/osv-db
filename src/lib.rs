@@ -18,7 +18,7 @@ use anyhow::Context;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
-use tempfile::{ tempdir_in};
+use tempfile::tempdir_in;
 
 pub use crate::osv_gs::{OsvGsEcosystem, OsvGsEcosystems};
 use crate::{
@@ -401,7 +401,7 @@ async fn download_and_extract_osv_archive(
     path: impl AsRef<Path>,
     chunk_size: u64,
 ) -> anyhow::Result<()> {
-    let temp_zip_archive_dir =  tempdir_in(&path)?;
+    let temp_zip_archive_dir = tempdir_in(&path)?;
     let archive = chuncked_download_to(
         client,
         &osv_archive_url(ecosystem),
