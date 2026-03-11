@@ -109,6 +109,21 @@ pub enum Ecosystem {
     Git,
 }
 
+impl EcosystemWithSuffix {
+    /// Returns the [`Ecosystem`] variant, without the suffix.
+    #[must_use]
+    pub fn ecosystem(&self) -> Ecosystem {
+        self.0
+    }
+
+    /// Returns the optional suffix component (e.g. `"10"` for `"Debian:10"`),
+    /// or `None` if no suffix is present.
+    #[must_use]
+    pub fn suffix(&self) -> Option<&str> {
+        self.1.as_deref()
+    }
+}
+
 impl Display for EcosystemWithSuffix {
     fn fmt(
         &self,
