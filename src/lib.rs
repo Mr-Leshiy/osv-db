@@ -302,16 +302,16 @@ async fn download_latest_archives(
     path: impl AsRef<Path>,
     chunk_size: u64,
 ) -> anyhow::Result<DateTime<Utc>> {
-    let mut max_modified = DateTime::<Utc>::from_timestamp_nanos(0);
     if ecosystems.is_all() {
-        max_modified = download_archive_for_ecosystem(client, None, &path, chunk_size).await?;
-    } else {
-        for eco in ecosystems.iter() {
-            let modified =
-                download_archive_for_ecosystem(client, Some(eco), &path, chunk_size).await?;
-            max_modified = max_modified.max(modified);
-        }
+        return download_archive_for_ecosystem(client, None, &path, chunk_size).await;
     }
+    let max_modified = futures::stream::iter(ecosystems.iter())
+        .map(|eco| download_archive_for_ecosystem(client, Some(eco), &path, chunk_size))
+        .buffer_unordered(SYNC_CONCURRENCY)
+        .try_fold(DateTime::<Utc>::MIN_UTC, |max, modified| async move {
+            Ok(max.max(modified))
+        })
+        .await?;
     Ok(max_modified)
 }
 
@@ -346,18 +346,20 @@ async fn collect_modified_entries(
     ecosystems: &OsvGsEcosystems,
     since: DateTime<Utc>,
 ) -> anyhow::Result<(DateTime<Utc>, Vec<OsvModifiedRecord>)> {
-    let mut new_last_modified = since;
-    let mut entries = Vec::new();
     if ecosystems.is_all() {
-        (new_last_modified, entries) = collect_entries_from_csv(client, None, since).await?;
-    } else {
-        for eco in ecosystems.iter() {
-            let (modified, eco_entries) =
-                collect_entries_from_csv(client, Some(eco), since).await?;
-            new_last_modified = new_last_modified.max(modified);
-            entries.extend(eco_entries);
-        }
+        return collect_entries_from_csv(client, None, since).await;
     }
+    let (new_last_modified, entries) = futures::stream::iter(ecosystems.iter())
+        .map(|eco| collect_entries_from_csv(client, Some(eco), since))
+        .buffer_unordered(SYNC_CONCURRENCY)
+        .try_fold(
+            (since, Vec::new()),
+            |(max_modified, mut all_entries), (modified, entries)| async move {
+                all_entries.extend(entries);
+                Ok((max_modified.max(modified), all_entries))
+            },
+        )
+        .await?;
     Ok((new_last_modified, entries))
 }
 
