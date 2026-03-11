@@ -1,8 +1,31 @@
 //! OSV google storage URLs
 
+use std::collections::HashSet;
+
 use strum::{Display, EnumString};
 
 const OSV_STORAGE_URL: &str = "https://storage.googleapis.com/osv-vulnerabilities";
+
+/// A set of OSV ecosystems to target.
+///
+/// An empty list means **all** ecosystems. Use the builder methods to restrict
+/// to a specific set.
+///
+/// # Examples
+///
+/// ```rust
+/// use osv_db::{OsvGsEcosystem, OsvGsEcosystems};
+///
+/// // All ecosystems
+/// let all = OsvGsEcosystems::all();
+///
+/// // Only crates.io and npm
+/// let subset = OsvGsEcosystems::all()
+///     .add(OsvGsEcosystem::CratesIo)
+///     .add(OsvGsEcosystem::Npm);
+/// ```
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct OsvGsEcosystems(HashSet<OsvGsEcosystem>);
 
 /// A single OSV ecosystem used for Google Storage API.
 /// See <https://storage.googleapis.com/osv-vulnerabilities/ecosystems.txt>
@@ -96,32 +119,11 @@ pub enum OsvGsEcosystem {
     OpenSUSE,
 }
 
-/// A set of OSV ecosystems to target.
-///
-/// An empty list means **all** ecosystems. Use the builder methods to restrict
-/// to a specific set.
-///
-/// # Examples
-///
-/// ```rust
-/// use osv_db::{OsvGsEcosystem, OsvGsEcosystems};
-///
-/// // All ecosystems
-/// let all = OsvGsEcosystems::all();
-///
-/// // Only crates.io and npm
-/// let subset = OsvGsEcosystems::all()
-///     .add(OsvGsEcosystem::CratesIo)
-///     .add(OsvGsEcosystem::Npm);
-/// ```
-#[derive(Debug, Clone, PartialEq, Eq, Default)]
-pub struct OsvGsEcosystems(Vec<OsvGsEcosystem>);
-
 impl OsvGsEcosystems {
     /// Creates an empty ecosystem set, meaning **all** ecosystems are targeted.
     #[must_use]
     pub fn all() -> Self {
-        Self(Vec::new())
+        Self(HashSet::new())
     }
 
     /// Returns `true` if no specific ecosystems have been selected, meaning all
@@ -142,11 +144,12 @@ impl OsvGsEcosystems {
     /// only the ecosystems explicitly listed are targeted — the implicit "all ecosystems"
     /// behaviour no longer applies.
     #[must_use]
+    #[allow(clippy::should_implement_trait)]
     pub fn add(
         mut self,
         ecosystem: OsvGsEcosystem,
     ) -> Self {
-        self.0.push(ecosystem);
+        self.0.insert(ecosystem);
         self
     }
 }
