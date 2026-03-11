@@ -19,7 +19,7 @@ use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
 
-pub use crate::osv_gs::OsvGsEcosystem;
+pub use crate::osv_gs::{OsvGsEcosystem, OsvGsEcosystems};
 use crate::{
     downloader::{chuncked_download_to, simple_download_to},
     osv_gs::{osv_archive_url, osv_modified_id_csv_url, osv_record_url},
@@ -178,7 +178,7 @@ impl OsvDb {
             .next()
             .context("OSV modified csv file must have at least one entry")?;
         let first_osv_record =
-            OsvModifiedRecord::try_from_csv_record(&first_record?, self.0.ecosystem)?;
+            OsvModifiedRecord::try_from_csv_record(&first_record?, self.0.ecosystem.clone())?;
         let new_last_modified = first_osv_record.modified;
 
         let records_dir = self.records_dir();
@@ -215,7 +215,7 @@ impl OsvDb {
         &self
     ) -> anyhow::Result<impl futures::Stream<Item = anyhow::Result<OsvRecord>>> {
         let tmp_dir = self.tmp_dir("osv-sync")?;
-        let ecosystem = self.0.ecosystem;
+        let ecosystem = self.0.ecosystem.clone();
         let last_modified = self.last_modified();
 
         let client = reqwest::Client::new();
@@ -344,6 +344,18 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[tokio::test]
+    async fn experiment() {
+        let tmp = TempDir::new().unwrap();
+        let osv = OsvDb::new(Some(OsvGsEcosystem::CratesIo), tmp.path()).unwrap();
+        osv.download_latest(10 * 1024 * 1024).await.unwrap();
+
+        let record_id = "RUSTSEC-2025-0112".to_string();
+        let record = osv.get_record(&record_id).unwrap().unwrap();
+        println!("{record:?}");
+
+    }
 
     /// Downloads the latest OSV database, reads `RUSTSEC-2024-0401`, removes all
     /// records modified at or before its `modified` timestamp, then asserts the
