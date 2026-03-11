@@ -439,22 +439,7 @@ mod tests {
 
     use super::*;
 
-    #[tokio::test]
-    async fn experiment() {
-        let tmp = TempDir::new().unwrap();
-        let osv = OsvDb::new(
-            OsvGsEcosystems::all().add(OsvGsEcosystem::CratesIo),
-            tmp.path(),
-        )
-        .unwrap();
-        osv.download_latest(10 * 1024 * 1024).await.unwrap();
-
-        let record_id = "RUSTSEC-2025-0112".to_string();
-        let record = osv.get_record(&record_id).unwrap().unwrap();
-        println!("{record:?}");
-    }
-
-    /// Downloads the latest OSV database, reads `RUSTSEC-2024-0401`, removes all
+    /// Downloads the latest OSV database, reads defiend record ids, removes all
     /// records modified at or before its `modified` timestamp, then asserts the
     /// record no longer exists. Then calls sync to re-download it and asserts it
     /// is present again.
@@ -469,22 +454,33 @@ mod tests {
         )
         .unwrap();
 
-        let record_id = "RUSTSEC-2024-0401".to_string();
-        assert!(osv.get_record(&record_id).unwrap().is_none());
+        let record_ids = [
+            "RUSTSEC-2024-0401".to_string(),
+            "JLSEC-2025-329".to_string(),
+        ];
+
+        for record_id in &record_ids {
+            assert!(osv.get_record(record_id).unwrap().is_none());
+        }
 
         osv.download_latest(10 * 1024 * 1024).await.unwrap();
 
-        let record = osv.get_record(&record_id).unwrap().unwrap();
-        assert_eq!(record.id, record_id);
+        for record_id in &record_ids {
+            let record = osv.get_record(&record_id).unwrap().unwrap();
+            assert_eq!(&record.id, record_id);
+        }
 
         // verify records_stream yields all records including our target
-        let ids: Vec<String> = osv
+        let ids: HashSet<OsvRecordId> = osv
             .records_stream()
             .unwrap()
             .map(|r| r.unwrap().id)
             .collect()
             .await;
-        assert!(ids.contains(&record_id));
+
+        for record_id in &record_ids {
+            assert!(ids.contains(record_id));
+        }
     }
 
     /// Initialises an empty database, sets `last_modified` to the date of
