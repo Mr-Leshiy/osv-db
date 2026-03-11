@@ -18,6 +18,7 @@ use anyhow::Context;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
+use tempfile::{ tempdir_in};
 
 pub use crate::osv_gs::{OsvGsEcosystem, OsvGsEcosystems};
 use crate::{
@@ -303,16 +304,17 @@ async fn download_latest_archives(
     chunk_size: u64,
 ) -> anyhow::Result<DateTime<Utc>> {
     if ecosystems.is_all() {
-        return download_archive_for_ecosystem(client, None, &path, chunk_size).await;
+        download_archive_for_ecosystem(client, None, &path, chunk_size).await
+    } else {
+        let max_modified = futures::stream::iter(ecosystems.iter())
+            .map(|eco| download_archive_for_ecosystem(client, Some(eco), &path, chunk_size))
+            .buffer_unordered(SYNC_CONCURRENCY)
+            .try_fold(DateTime::<Utc>::MIN_UTC, |max, modified| {
+                async move { Ok(max.max(modified)) }
+            })
+            .await?;
+        Ok(max_modified)
     }
-    let max_modified = futures::stream::iter(ecosystems.iter())
-        .map(|eco| download_archive_for_ecosystem(client, Some(eco), &path, chunk_size))
-        .buffer_unordered(SYNC_CONCURRENCY)
-        .try_fold(DateTime::<Utc>::MIN_UTC, |max, modified| async move {
-            Ok(max.max(modified))
-        })
-        .await?;
-    Ok(max_modified)
 }
 
 /// Downloads and extracts the OSV archive for the given `ecosystem` (or the global
@@ -347,20 +349,23 @@ async fn collect_modified_entries(
     since: DateTime<Utc>,
 ) -> anyhow::Result<(DateTime<Utc>, Vec<OsvModifiedRecord>)> {
     if ecosystems.is_all() {
-        return collect_entries_from_csv(client, None, since).await;
+        collect_entries_from_csv(client, None, since).await
+    } else {
+        let (new_last_modified, entries) = futures::stream::iter(ecosystems.iter())
+            .map(|eco| collect_entries_from_csv(client, Some(eco), since))
+            .buffer_unordered(SYNC_CONCURRENCY)
+            .try_fold(
+                (since, Vec::new()),
+                |(max_modified, mut all_entries), (modified, entries)| {
+                    async move {
+                        all_entries.extend(entries);
+                        Ok((max_modified.max(modified), all_entries))
+                    }
+                },
+            )
+            .await?;
+        Ok((new_last_modified, entries))
     }
-    let (new_last_modified, entries) = futures::stream::iter(ecosystems.iter())
-        .map(|eco| collect_entries_from_csv(client, Some(eco), since))
-        .buffer_unordered(SYNC_CONCURRENCY)
-        .try_fold(
-            (since, Vec::new()),
-            |(max_modified, mut all_entries), (modified, entries)| async move {
-                all_entries.extend(entries);
-                Ok((max_modified.max(modified), all_entries))
-            },
-        )
-        .await?;
-    Ok((new_last_modified, entries))
 }
 
 /// Downloads and reads the `modified_id.csv` for the given `ecosystem` (or the global
@@ -396,19 +401,16 @@ async fn download_and_extract_osv_archive(
     path: impl AsRef<Path>,
     chunk_size: u64,
 ) -> anyhow::Result<()> {
-    let zip_archive_path = path.as_ref().join("osv.zip");
+    let temp_zip_archive_dir =  tempdir_in(&path)?;
     let archive = chuncked_download_to(
         client,
         &osv_archive_url(ecosystem),
         chunk_size,
-        &zip_archive_path,
+        temp_zip_archive_dir.path().join("osv.zip"),
     )
     .await?;
-
     let mut zip_archive = zip::ZipArchive::new(archive)?;
     zip_archive.extract(&path)?;
-    std::fs::remove_file(&zip_archive_path)?;
-
     Ok(())
 }
 
@@ -460,7 +462,9 @@ mod tests {
     async fn download_latest_test() {
         let tmp = TempDir::new().unwrap();
         let osv = OsvDb::new(
-            OsvGsEcosystems::all().add(OsvGsEcosystem::CratesIo),
+            OsvGsEcosystems::all()
+                .add(OsvGsEcosystem::CratesIo)
+                .add(OsvGsEcosystem::Julia),
             tmp.path(),
         )
         .unwrap();
