@@ -17,7 +17,7 @@ use std::{
 use anyhow::Context;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::{StreamExt, TryStreamExt};
+use futures::StreamExt;
 use tempfile::tempdir_in;
 
 pub use crate::osv_gs::{OsvGsEcosystem, OsvGsEcosystems};
@@ -29,7 +29,6 @@ use crate::{
 
 const OSV_RECORD_FILE_EXTENSION: &str = "json";
 const RECORDS_DIRECTORY: &str = "records";
-const SYNC_CONCURRENCY: usize = 10;
 
 #[derive(Debug, Clone)]
 pub struct OsvDb(Arc<OsvDbInner>);
@@ -225,50 +224,50 @@ impl OsvDb {
             collect_modified_entries(&client, &self.0.ecosystems, last_modified).await?;
 
         // Concurrently download all records.
-        futures::stream::iter(entries_to_download)
-            .map(|entry| {
-                let client = client.clone();
-                let tmp_path = tmp_dir.path().to_path_buf();
-                async move {
-                    let mut record_filename = PathBuf::from(&entry.id);
-                    record_filename.add_extension(OSV_RECORD_FILE_EXTENSION);
-                    simple_download_to(
-                        &client,
-                        &osv_record_url(Some(&entry.ecosystem), &entry.id),
-                        &tmp_path.join(&record_filename),
-                    )
-                    .await?;
-                    anyhow::Ok(())
-                }
-            })
-            .buffer_unordered(SYNC_CONCURRENCY)
-            .try_collect::<Vec<_>>()
-            .await?;
+        let mut tasks = tokio::task::JoinSet::new();
+        for entry in entries_to_download {
+            let client = client.clone();
+            let tmp_path = tmp_dir.path().to_path_buf();
+            tasks.spawn(async move {
+                let mut record_filename = PathBuf::from(&entry.id);
+                record_filename.add_extension(OSV_RECORD_FILE_EXTENSION);
+                simple_download_to(
+                    &client,
+                    &osv_record_url(Some(&entry.ecosystem), &entry.id),
+                    &tmp_path.join(&record_filename),
+                )
+                .await?;
+                anyhow::Ok(())
+            });
+        }
+        while let Some(res) = tasks.join_next().await {
+            res??;
+        }
 
         let records_dir = self.records_dir();
         if !records_dir.exists() {
             std::fs::create_dir(&records_dir)?;
         }
-        let new_record_paths: Vec<PathBuf> =
-            futures::stream::iter(std::fs::read_dir(tmp_dir.path())?)
-                .map({
-                    |entry| {
-                        let records_dir = records_dir.clone();
-                        async move {
-                            let entry = entry?;
-                            let dest = records_dir.join(entry.file_name());
+        let mut tasks = tokio::task::JoinSet::new();
+        for entry in std::fs::read_dir(tmp_dir.path())? {
+            let records_dir = records_dir.clone();
+            tasks.spawn(async move {
+                let entry = entry?;
+                let dest = records_dir.join(entry.file_name());
 
-                            // Atomically replaces the current records directory with the newly
-                            // downloaded one. rename(2) is guaranteed
-                            // to be atomic on POSIX systems — see <https://man7.org/linux/man-pages/man2/rename.2.html>.
-                            tokio::fs::rename(entry.path(), &dest).await?;
-                            anyhow::Ok(dest)
-                        }
-                    }
-                })
-                .buffer_unordered(SYNC_CONCURRENCY)
-                .try_collect()
-                .await?;
+                // Atomically replaces the current records directory with the newly
+                // downloaded one. rename(2) is guaranteed
+                // to be atomic on POSIX systems — see <https://man7.org/linux/man-pages/man2/rename.2.html>.
+                tokio::fs::rename(entry.path(), &dest).await?;
+                anyhow::Ok(dest)
+            });
+        }
+        // resolve error right now, before modifying `last_modified` field
+        let new_record_paths: Vec<PathBuf> = tasks
+            .join_all()
+            .await
+            .into_iter()
+            .collect::<Result<_, _>>()?;
 
         let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
         self.0
@@ -306,14 +305,22 @@ async fn download_latest_archives(
     if ecosystems.is_all() {
         download_archive_for_ecosystem(client, None, &path, chunk_size).await
     } else {
-        let max_modified = futures::stream::iter(ecosystems.iter())
-            .map(|eco| download_archive_for_ecosystem(client, Some(eco), &path, chunk_size))
-            .buffer_unordered(SYNC_CONCURRENCY)
-            .try_fold(DateTime::<Utc>::MIN_UTC, |max, modified| {
-                async move { Ok(max.max(modified)) }
+        let mut tasks = tokio::task::JoinSet::new();
+        for eco in ecosystems.iter() {
+            let client = client.clone();
+            let path = path.as_ref().to_path_buf();
+            let eco = *eco;
+            tasks.spawn(async move {
+                download_archive_for_ecosystem(&client, Some(&eco), &path, chunk_size).await
+            });
+        }
+        tasks
+            .join_all()
+            .await
+            .into_iter()
+            .try_fold(DateTime::<Utc>::MIN_UTC, |last_modified, new_modified| {
+                anyhow::Ok(last_modified.max(new_modified?))
             })
-            .await?;
-        Ok(max_modified)
     }
 }
 
@@ -351,20 +358,20 @@ async fn collect_modified_entries(
     if ecosystems.is_all() {
         collect_entries_from_csv(client, None, since).await
     } else {
-        let (new_last_modified, entries) = futures::stream::iter(ecosystems.iter())
-            .map(|eco| collect_entries_from_csv(client, Some(eco), since))
-            .buffer_unordered(SYNC_CONCURRENCY)
-            .try_fold(
-                (since, Vec::new()),
-                |(max_modified, mut all_entries), (modified, entries)| {
-                    async move {
-                        all_entries.extend(entries);
-                        Ok((max_modified.max(modified), all_entries))
-                    }
-                },
-            )
-            .await?;
-        Ok((new_last_modified, entries))
+        let mut tasks = tokio::task::JoinSet::new();
+        for eco in ecosystems.iter() {
+            let client = client.clone();
+            let eco = *eco;
+            tasks.spawn(async move { collect_entries_from_csv(&client, Some(&eco), since).await });
+        }
+        tasks.join_all().await.into_iter().try_fold(
+            (since, Vec::new()),
+            |(last_modified, mut entries), res| {
+                let (new_modified, new_entries) = res?;
+                entries.extend(new_entries);
+                anyhow::Ok((last_modified.max(new_modified), entries))
+            },
+        )
     }
 }
 
@@ -466,7 +473,7 @@ mod tests {
         osv.download_latest(10 * 1024 * 1024).await.unwrap();
 
         for record_id in &record_ids {
-            let record = osv.get_record(&record_id).unwrap().unwrap();
+            let record = osv.get_record(record_id).unwrap().unwrap();
             assert_eq!(&record.id, record_id);
         }
 
