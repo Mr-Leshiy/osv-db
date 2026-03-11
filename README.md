@@ -18,14 +18,14 @@ Official [OSV Documentation](https://google.github.io/osv.dev/).
 ## Usage
 
 ```rust
-use osv_db::{OsvDb, OsvGsEcosystems};
+use osv_db::{OsvDb, OsvGsEcosystems, OsvGsEcosystem};
 use tempfile::TempDir;
 use futures::TryStreamExt;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let dir = TempDir::new()?;
-    let db = OsvDb::new(OsvGsEcosystems::all(), dir.path())?;
+    let db = OsvDb::new(OsvGsEcosystems::all().add(OsvGsEcosystem::CratesIo), dir.path())?;
 
     // Download the full database for crates.io
     db.download_latest(10 * 1024 * 1024).await?;
