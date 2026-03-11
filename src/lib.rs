@@ -226,10 +226,24 @@ impl OsvDb {
         let mut entries_to_download = Vec::new();
 
         if self.0.ecosystems.is_all() {
-            collect_entries_from_csv(&client, None, last_modified, &mut new_last_modified, &mut entries_to_download).await?;
+            collect_entries_from_csv(
+                &client,
+                None,
+                last_modified,
+                &mut new_last_modified,
+                &mut entries_to_download,
+            )
+            .await?;
         } else {
             for eco in self.0.ecosystems.iter() {
-                collect_entries_from_csv(&client, Some(eco), last_modified, &mut new_last_modified, &mut entries_to_download).await?;
+                collect_entries_from_csv(
+                    &client,
+                    Some(eco),
+                    last_modified,
+                    &mut new_last_modified,
+                    &mut entries_to_download,
+                )
+                .await?;
             }
         }
 
@@ -300,7 +314,8 @@ impl OsvDb {
 /// maximum `modified` timestamp seen across their `modified_id.csv` files.
 ///
 /// When `ecosystems` targets all ecosystems, the single global archive is used.
-/// Otherwise each ecosystem's archive is downloaded and extracted into the same directory.
+/// Otherwise each ecosystem's archive is downloaded and extracted into the same
+/// directory.
 ///
 /// The `modified_id.csv` files are sorted in reverse chronological order, so the first
 /// entry is always the most recently modified record for that ecosystem.
@@ -412,13 +427,16 @@ mod tests {
     #[tokio::test]
     async fn experiment() {
         let tmp = TempDir::new().unwrap();
-        let osv = OsvDb::new(OsvGsEcosystems::all().add(OsvGsEcosystem::CratesIo), tmp.path()).unwrap();
+        let osv = OsvDb::new(
+            OsvGsEcosystems::all().add(OsvGsEcosystem::CratesIo),
+            tmp.path(),
+        )
+        .unwrap();
         osv.download_latest(10 * 1024 * 1024).await.unwrap();
 
         let record_id = "RUSTSEC-2025-0112".to_string();
         let record = osv.get_record(&record_id).unwrap().unwrap();
         println!("{record:?}");
-
     }
 
     /// Downloads the latest OSV database, reads `RUSTSEC-2024-0401`, removes all
@@ -428,7 +446,11 @@ mod tests {
     #[tokio::test]
     async fn download_latest_test() {
         let tmp = TempDir::new().unwrap();
-        let osv = OsvDb::new(OsvGsEcosystems::all().add(OsvGsEcosystem::CratesIo), tmp.path()).unwrap();
+        let osv = OsvDb::new(
+            OsvGsEcosystems::all().add(OsvGsEcosystem::CratesIo),
+            tmp.path(),
+        )
+        .unwrap();
 
         let record_id = "RUSTSEC-2024-0401".to_string();
         assert!(osv.get_record(&record_id).unwrap().is_none());
@@ -463,7 +485,11 @@ mod tests {
         let last_modified: DateTime<Utc> = "2026-03-05T00:00:00Z".parse().unwrap();
 
         let tmp = TempDir::new().unwrap();
-        let osv = OsvDb::new(OsvGsEcosystems::all().add(OsvGsEcosystem::CratesIo), tmp.path()).unwrap();
+        let osv = OsvDb::new(
+            OsvGsEcosystems::all().add(OsvGsEcosystem::CratesIo),
+            tmp.path(),
+        )
+        .unwrap();
 
         let record_id = "RUSTSEC-2026-0032".to_string();
 
