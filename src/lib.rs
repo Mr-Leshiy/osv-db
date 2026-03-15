@@ -233,7 +233,7 @@ impl OsvDb {
                 record_filename.add_extension(OSV_RECORD_FILE_EXTENSION);
                 simple_download_to(
                     &client,
-                    &osv_record_url(Some(&entry.ecosystem), &entry.id),
+                    &osv_record_url(entry.ecosystem, &entry.id),
                     &tmp_path.join(&record_filename),
                 )
                 .await?;
@@ -309,9 +309,8 @@ async fn download_latest_archives(
         for eco in ecosystems.iter() {
             let client = client.clone();
             let path = path.as_ref().to_path_buf();
-            let eco = *eco;
             tasks.spawn(async move {
-                download_archive_for_ecosystem(&client, Some(&eco), &path, chunk_size).await
+                download_archive_for_ecosystem(&client, Some(eco), &path, chunk_size).await
             });
         }
         tasks
@@ -329,7 +328,7 @@ async fn download_latest_archives(
 /// `modified_id.csv` and returns its `modified` timestamp.
 async fn download_archive_for_ecosystem(
     client: &reqwest::Client,
-    ecosystem: Option<&OsvGsEcosystem>,
+    ecosystem: Option<OsvGsEcosystem>,
     path: impl AsRef<Path>,
     chunk_size: u64,
 ) -> anyhow::Result<DateTime<Utc>> {
@@ -339,7 +338,7 @@ async fn download_archive_for_ecosystem(
         .records()
         .next()
         .context("OSV modified csv file must have at least one entry")?;
-    let entry = OsvModifiedRecord::try_from_csv_record(&first_record?, ecosystem.copied())?;
+    let entry = OsvModifiedRecord::try_from_csv_record(&first_record?, ecosystem)?;
     Ok(entry.modified)
 }
 
@@ -361,8 +360,7 @@ async fn collect_modified_entries(
         let mut tasks = tokio::task::JoinSet::new();
         for eco in ecosystems.iter() {
             let client = client.clone();
-            let eco = *eco;
-            tasks.spawn(async move { collect_entries_from_csv(&client, Some(&eco), since).await });
+            tasks.spawn(async move { collect_entries_from_csv(&client, Some(eco), since).await });
         }
         tasks.join_all().await.into_iter().try_fold(
             (since, Vec::new()),
@@ -383,14 +381,14 @@ async fn collect_modified_entries(
 /// entry at or before `since` is encountered.
 async fn collect_entries_from_csv(
     client: &reqwest::Client,
-    ecosystem: Option<&OsvGsEcosystem>,
+    ecosystem: Option<OsvGsEcosystem>,
     since: DateTime<Utc>,
 ) -> anyhow::Result<(DateTime<Utc>, Vec<OsvModifiedRecord>)> {
     let mut new_last_modified = since;
     let mut entries = Vec::new();
     let mut csv_rdr = download_osv_modified_csv(client, ecosystem).await?;
     for result in csv_rdr.records() {
-        let entry = OsvModifiedRecord::try_from_csv_record(&result?, ecosystem.copied())?;
+        let entry = OsvModifiedRecord::try_from_csv_record(&result?, ecosystem)?;
         if entry.modified <= since {
             break;
         }
@@ -404,7 +402,7 @@ async fn collect_entries_from_csv(
 /// [`None`]) from <https://storage.googleapis.com/osv-vulnerabilities> and extracts it into `path`.
 async fn download_and_extract_osv_archive(
     client: &reqwest::Client,
-    ecosystem: Option<&OsvGsEcosystem>,
+    ecosystem: Option<OsvGsEcosystem>,
     path: impl AsRef<Path>,
     chunk_size: u64,
 ) -> anyhow::Result<()> {
@@ -423,7 +421,7 @@ async fn download_and_extract_osv_archive(
 
 async fn download_osv_modified_csv(
     client: &reqwest::Client,
-    ecosystem: Option<&OsvGsEcosystem>,
+    ecosystem: Option<OsvGsEcosystem>,
 ) -> anyhow::Result<csv::Reader<Cursor<Bytes>>> {
     let csv_bytes = client
         .get(osv_modified_id_csv_url(ecosystem))
