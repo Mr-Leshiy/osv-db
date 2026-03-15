@@ -169,11 +169,8 @@ pub fn osv_modified_id_csv_url(ecosystem: Option<&OsvGsEcosystem>) -> String {
 }
 
 pub fn osv_record_url(
-    ecosystem: Option<&OsvGsEcosystem>,
+    ecosystem: OsvGsEcosystem,
     record_path: &str,
 ) -> String {
-    match ecosystem {
-        Some(ecosystem) => format!("{OSV_STORAGE_URL}/{ecosystem}/{record_path}.json"),
-        None => format!("{OSV_STORAGE_URL}/{record_path}.json"),
-    }
+    format!("{OSV_STORAGE_URL}/{ecosystem}/{record_path}.json")
 }

@@ -233,7 +233,7 @@ impl OsvDb {
                 record_filename.add_extension(OSV_RECORD_FILE_EXTENSION);
                 simple_download_to(
                     &client,
-                    &osv_record_url(Some(&entry.ecosystem), &entry.id),
+                    &osv_record_url(entry.ecosystem, &entry.id),
                     &tmp_path.join(&record_filename),
                 )
                 .await?;
