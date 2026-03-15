@@ -136,8 +136,8 @@ impl OsvGsEcosystems {
     /// Iterates over the explicitly selected ecosystems.
     ///
     /// Returns an empty iterator when [`OsvGsEcosystems::is_all`] is `true`.
-    pub fn iter(&self) -> impl Iterator<Item = &OsvGsEcosystem> {
-        self.0.iter()
+    pub fn iter(&self) -> impl Iterator<Item = OsvGsEcosystem> {
+        self.0.iter().copied()
     }
 
     /// Add an [`OsvGsEcosystem`] to the set. Once at least one ecosystem is added,
@@ -154,14 +154,14 @@ impl OsvGsEcosystems {
     }
 }
 
-pub fn osv_archive_url(ecosystem: Option<&OsvGsEcosystem>) -> String {
+pub fn osv_archive_url(ecosystem: Option<OsvGsEcosystem>) -> String {
     match ecosystem {
         Some(ecosystem) => format!("{OSV_STORAGE_URL}/{ecosystem}/all.zip"),
         None => format!("{OSV_STORAGE_URL}/all.zip"),
     }
 }
 
-pub fn osv_modified_id_csv_url(ecosystem: Option<&OsvGsEcosystem>) -> String {
+pub fn osv_modified_id_csv_url(ecosystem: Option<OsvGsEcosystem>) -> String {
     match ecosystem {
         Some(ecosystem) => format!("{OSV_STORAGE_URL}/{ecosystem}/modified_id.csv"),
         None => format!("{OSV_STORAGE_URL}/modified_id.csv"),
