@@ -59,6 +59,7 @@ csv = "1"
 zip = "2"
 strum = { version = "0.26", features = ["derive"] }
 tempfile = "3.26.0"
+itertools = "0.14.0"
 
 [dev-dependencies]
 anyhow = "1.0.102"
