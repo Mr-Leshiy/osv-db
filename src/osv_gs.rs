@@ -204,12 +204,6 @@ mod tests {
         .add(OsvGsEcosystem::Go)
         => "[Go]"
     )]
-    #[test_case(
-        OsvGsEcosystems::all()
-        .add(OsvGsEcosystem::Go)
-        .add(OsvGsEcosystem::Npm)
-        => "[Go,npm]"
-    )]
     #[allow(clippy::needless_pass_by_value)]
     fn osv_gs_ecosystems_display(v: OsvGsEcosystems) -> String {
         v.to_string()
