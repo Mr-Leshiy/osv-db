@@ -1,8 +1,7 @@
-use anyhow::Context;
 use chrono::{DateTime, Utc};
 
 use super::OsvRecordId;
-use crate::osv_gs::OsvGsEcosystem;
+use crate::{errors::ParseModifiedRecordErr, osv_gs::OsvGsEcosystem};
 
 /// A single entry from a `modified_id.csv` index file.
 pub struct OsvModifiedRecord {
@@ -23,19 +22,19 @@ impl OsvModifiedRecord {
     pub fn try_from_csv_record(
         record: &csv::StringRecord,
         ecosystem: Option<OsvGsEcosystem>,
-    ) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            record.len() == 2,
-            "expected 2 columns, got {}",
-            record.len()
-        );
+    ) -> Result<Self, ParseModifiedRecordErr> {
+        if record.len() != 2 {
+            return Err(ParseModifiedRecordErr::WrongColumnCount(record.len()));
+        }
 
-        let timestamp_str = record.get(0).context("missing timestamp column")?;
-        let path = record.get(1).context("missing path column")?;
+        let timestamp_str = record
+            .get(0)
+            .ok_or(ParseModifiedRecordErr::MissingTimestamp)?;
+        let path = record.get(1).ok_or(ParseModifiedRecordErr::MissingPath)?;
 
         let modified: DateTime<Utc> = timestamp_str
             .parse()
-            .context("invalid timestamp in modified_id.csv")?;
+            .map_err(ParseModifiedRecordErr::ParseTimestamp)?;
 
         if let Some(ecosystem) = ecosystem {
             Ok(Self {
@@ -43,14 +42,16 @@ impl OsvModifiedRecord {
                 ecosystem,
                 id: path.to_string(),
             })
-        } else if let Some((ecosystem, id)) = path.split_once('/') {
+        } else if let Some((ecosystem_str, id)) = path.split_once('/') {
             Ok(Self {
                 modified,
-                ecosystem: ecosystem.parse()?,
+                ecosystem: ecosystem_str
+                    .parse()
+                    .map_err(ParseModifiedRecordErr::ParseEcosystem)?,
                 id: id.to_string(),
             })
         } else {
-            anyhow::bail!("Invalid format, must be <ecosystem_dir>/<id>, provided: {path}")
+            Err(ParseModifiedRecordErr::InvalidPathFormat(path.to_string()))
         }
     }
 }

@@ -4,6 +4,8 @@ use std::{
     path::Path,
 };
 
+use crate::errors::DownloaderErr;
+
 /// Performs an HTTP range requests to download a large content to a file.
 ///
 /// <https://developer.mozilla.org/en-US/docs/Web/HTTP/Guides/Range_requests>
@@ -16,8 +18,8 @@ pub async fn chuncked_download_to(
     url: &str,
     chunk_size: u64,
     path: impl AsRef<Path>,
-) -> anyhow::Result<File> {
-    let head = client.head(url).send().await?;
+) -> Result<File, DownloaderErr> {
+    let head = client.head(url).send().await.map_err(DownloaderErr::Http)?;
 
     let accepts_ranges = head
         .headers()
@@ -43,7 +45,7 @@ async fn download_chunked(
     total: u64,
     chunk_size: u64,
     path: impl AsRef<Path>,
-) -> anyhow::Result<File> {
+) -> Result<File, DownloaderErr> {
     let (tx, mut rx) = tokio::sync::mpsc::channel(4);
 
     let spawner_client = client.clone();
@@ -62,7 +64,7 @@ async fn download_chunked(
             let chunk_tx = tx.clone();
 
             let _handle = tokio::spawn(async move {
-                let result = async {
+                let result: Result<_, DownloaderErr> = async {
                     let chunk = chunk_client
                         .get(&chunk_url)
                         .header(
@@ -70,10 +72,12 @@ async fn download_chunked(
                             format!("bytes={offset}-{}", end.saturating_sub(1)),
                         )
                         .send()
-                        .await?
+                        .await
+                        .map_err(DownloaderErr::Http)?
                         .bytes()
-                        .await?;
-                    anyhow::Ok((chunk, offset))
+                        .await
+                        .map_err(DownloaderErr::Http)?;
+                    Ok((chunk, offset))
                 }
                 .await;
                 // Receiver gone means the writer hit an error; nothing to do
@@ -91,14 +95,16 @@ async fn download_chunked(
         .truncate(true)
         .write(true)
         .read(true)
-        .open(path)?;
-    file.set_len(total)?;
+        .open(path)
+        .map_err(DownloaderErr::Io)?;
+    file.set_len(total).map_err(DownloaderErr::Io)?;
 
     // Receive and write each chunk in the order it arrives
     while let Some(result) = rx.recv().await {
         let (chunk, offset) = result?;
-        file.seek(std::io::SeekFrom::Start(offset))?;
-        file.write_all(&chunk)?;
+        file.seek(std::io::SeekFrom::Start(offset))
+            .map_err(DownloaderErr::Io)?;
+        file.write_all(&chunk).map_err(DownloaderErr::Io)?;
     }
 
     Ok(file)
@@ -109,15 +115,23 @@ pub async fn simple_download_to(
     client: &reqwest::Client,
     url: &str,
     path: impl AsRef<Path>,
-) -> anyhow::Result<File> {
+) -> Result<File, DownloaderErr> {
     let mut file = OpenOptions::new()
         .create(true)
         .truncate(true)
         .write(true)
         .read(true)
-        .open(path)?;
-    let data = client.get(url).send().await?.bytes().await?;
-    file.write_all(&data)?;
+        .open(path)
+        .map_err(DownloaderErr::Io)?;
+    let data = client
+        .get(url)
+        .send()
+        .await
+        .map_err(DownloaderErr::Http)?
+        .bytes()
+        .await
+        .map_err(DownloaderErr::Http)?;
+    file.write_all(&data).map_err(DownloaderErr::Io)?;
     Ok(file)
 }
 
