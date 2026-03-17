@@ -191,8 +191,9 @@ pub fn osv_record_url(
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use test_case::test_case;
+
+    use super::*;
 
     #[test_case(
         OsvGsEcosystems::all()
