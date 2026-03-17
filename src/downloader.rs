@@ -19,11 +19,7 @@ pub async fn chuncked_download_to(
     chunk_size: u64,
     path: impl AsRef<Path>,
 ) -> Result<File, DownloaderErr> {
-    let head = client
-        .head(url)
-        .send()
-        .await
-        .map_err(DownloaderErr::Http)?;
+    let head = client.head(url).send().await.map_err(DownloaderErr::Http)?;
 
     let accepts_ranges = head
         .headers()

@@ -41,7 +41,8 @@ pub enum RecordsStreamErr {
     ReadDir(#[source] std::io::Error),
 }
 
-/// Error yielded by individual stream items from `OsvDb::records_stream` and `OsvDb::sync`.
+/// Error yielded by individual stream items from `OsvDb::records_stream` and
+/// `OsvDb::sync`.
 #[derive(Debug, Error)]
 pub enum ReadRecordErr {
     /// Failed to read the record file from disk.

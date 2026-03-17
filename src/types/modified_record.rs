@@ -30,9 +30,7 @@ impl OsvModifiedRecord {
         let timestamp_str = record
             .get(0)
             .ok_or(ParseModifiedRecordErr::MissingTimestamp)?;
-        let path = record
-            .get(1)
-            .ok_or(ParseModifiedRecordErr::MissingPath)?;
+        let path = record.get(1).ok_or(ParseModifiedRecordErr::MissingPath)?;
 
         let modified: DateTime<Utc> = timestamp_str
             .parse()

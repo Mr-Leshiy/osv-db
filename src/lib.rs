@@ -1,8 +1,8 @@
 #![doc = include_str!("../README.md")]
 
 mod downloader;
-mod osv_gs;
 pub mod errors;
+mod osv_gs;
 pub mod types;
 
 use std::{
@@ -103,7 +103,10 @@ impl OsvDb {
         self.location().join(RECORDS_DIRECTORY)
     }
 
-    fn tmp_dir(&self, prefix: &str) -> Result<tempfile::TempDir, std::io::Error> {
+    fn tmp_dir(
+        &self,
+        prefix: &str,
+    ) -> Result<tempfile::TempDir, std::io::Error> {
         tempfile::Builder::new()
             .prefix(prefix)
             .tempdir_in(self.location())
@@ -127,8 +130,7 @@ impl OsvDb {
             return Ok(None);
         }
         let osv_record_file = File::open(record_path).map_err(GetRecordErr::Io)?;
-        let osv_record =
-            serde_json::from_reader(&osv_record_file).map_err(GetRecordErr::Json)?;
+        let osv_record = serde_json::from_reader(&osv_record_file).map_err(GetRecordErr::Json)?;
         Ok(Some(osv_record))
     }
 
@@ -140,13 +142,11 @@ impl OsvDb {
     ///
     /// [`Stream`]: futures::Stream
     pub fn records_stream(
-        &self,
-    ) -> Result<
-        impl futures::Stream<Item = Result<OsvRecord, ReadRecordErr>>,
-        RecordsStreamErr,
-    > {
-        let records_dir_content = std::fs::read_dir(self.records_dir())
-            .map_err(RecordsStreamErr::ReadDir)?;
+        &self
+    ) -> Result<impl futures::Stream<Item = Result<OsvRecord, ReadRecordErr>>, RecordsStreamErr>
+    {
+        let records_dir_content =
+            std::fs::read_dir(self.records_dir()).map_err(RecordsStreamErr::ReadDir)?;
         let stream = futures::stream::iter(records_dir_content)
             .filter_map(|entry| {
                 async {
@@ -164,8 +164,7 @@ impl OsvDb {
                     let bytes = tokio::fs::read(entry.path())
                         .await
                         .map_err(ReadRecordErr::Io)?;
-                    let osv_record =
-                        serde_json::from_slice(&bytes).map_err(ReadRecordErr::Json)?;
+                    let osv_record = serde_json::from_slice(&bytes).map_err(ReadRecordErr::Json)?;
                     Ok(osv_record)
                 }
             });
@@ -184,7 +183,9 @@ impl OsvDb {
         &self,
         chunk_size: u64,
     ) -> Result<(), DownloadLatestErr> {
-        let tmp_dir = self.tmp_dir("osv-download").map_err(DownloadLatestErr::Io)?;
+        let tmp_dir = self
+            .tmp_dir("osv-download")
+            .map_err(DownloadLatestErr::Io)?;
         let client = reqwest::Client::new();
 
         let new_last_modified =
@@ -223,7 +224,7 @@ impl OsvDb {
     ///
     /// [`Stream`]: futures::Stream
     pub async fn sync(
-        &self,
+        &self
     ) -> Result<impl futures::Stream<Item = Result<OsvRecord, ReadRecordErr>>, SyncErr> {
         let tmp_dir = self.tmp_dir("osv-sync").map_err(SyncErr::Io)?;
         let last_modified = self.last_modified();
@@ -292,11 +293,8 @@ impl OsvDb {
 
         let stream = futures::stream::iter(new_record_paths).then(|path| {
             async move {
-                let bytes = tokio::fs::read(&path)
-                    .await
-                    .map_err(ReadRecordErr::Io)?;
-                let osv_record =
-                    serde_json::from_slice(&bytes).map_err(ReadRecordErr::Json)?;
+                let bytes = tokio::fs::read(&path).await.map_err(ReadRecordErr::Io)?;
+                let osv_record = serde_json::from_slice(&bytes).map_err(ReadRecordErr::Json)?;
                 Ok::<OsvRecord, ReadRecordErr>(osv_record)
             }
         });
@@ -415,11 +413,9 @@ async fn collect_entries_from_csv(
         .await
         .map_err(SyncErr::Download)?;
     for result in csv_rdr.records() {
-        let entry = OsvModifiedRecord::try_from_csv_record(
-            &result.map_err(SyncErr::Csv)?,
-            ecosystem,
-        )
-        .map_err(SyncErr::ParseRecord)?;
+        let entry =
+            OsvModifiedRecord::try_from_csv_record(&result.map_err(SyncErr::Csv)?, ecosystem)
+                .map_err(SyncErr::ParseRecord)?;
         if entry.modified <= since {
             break;
         }
@@ -437,8 +433,7 @@ async fn download_and_extract_osv_archive(
     path: impl AsRef<Path>,
     chunk_size: u64,
 ) -> Result<(), DownloadLatestErr> {
-    let temp_zip_archive_dir =
-        tempdir_in(&path).map_err(DownloadLatestErr::Io)?;
+    let temp_zip_archive_dir = tempdir_in(&path).map_err(DownloadLatestErr::Io)?;
     let archive = chuncked_download_to(
         client,
         &osv_archive_url(ecosystem),
@@ -447,11 +442,8 @@ async fn download_and_extract_osv_archive(
     )
     .await
     .map_err(DownloadLatestErr::Download)?;
-    let mut zip_archive =
-        zip::ZipArchive::new(archive).map_err(DownloadLatestErr::Zip)?;
-    zip_archive
-        .extract(&path)
-        .map_err(DownloadLatestErr::Zip)?;
+    let mut zip_archive = zip::ZipArchive::new(archive).map_err(DownloadLatestErr::Zip)?;
+    zip_archive.extract(&path).map_err(DownloadLatestErr::Zip)?;
     Ok(())
 }
 
