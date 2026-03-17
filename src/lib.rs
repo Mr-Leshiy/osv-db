@@ -2,6 +2,7 @@
 
 mod downloader;
 mod osv_gs;
+pub mod errors;
 pub mod types;
 
 use std::{
@@ -14,7 +15,6 @@ use std::{
     },
 };
 
-use anyhow::Context;
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
@@ -23,6 +23,10 @@ use tempfile::tempdir_in;
 pub use crate::osv_gs::{OsvGsEcosystem, OsvGsEcosystems};
 use crate::{
     downloader::{chuncked_download_to, simple_download_to},
+    errors::{
+        DownloadLatestErr, DownloaderErr, GetRecordErr, OsvDbNewErr, ReadRecordErr,
+        RecordsStreamErr, SyncErr,
+    },
     osv_gs::{osv_archive_url, osv_modified_id_csv_url, osv_record_url},
     types::{OsvModifiedRecord, OsvRecord, OsvRecordId},
 };
@@ -58,12 +62,12 @@ impl OsvDb {
     pub fn new(
         ecosystems: OsvGsEcosystems,
         path: impl AsRef<Path>,
-    ) -> anyhow::Result<Self> {
-        anyhow::ensure!(
-            path.as_ref().is_dir(),
-            "Provided `path` {} must be a directory and exists",
-            path.as_ref().display()
-        );
+    ) -> Result<Self, OsvDbNewErr> {
+        if !path.as_ref().is_dir() {
+            return Err(OsvDbNewErr {
+                path: path.as_ref().to_path_buf(),
+            });
+        }
         Ok(Self(Arc::new(OsvDbInner {
             location: path.as_ref().to_path_buf(),
             ecosystems,
@@ -99,13 +103,10 @@ impl OsvDb {
         self.location().join(RECORDS_DIRECTORY)
     }
 
-    fn tmp_dir(
-        &self,
-        prefix: &str,
-    ) -> anyhow::Result<tempfile::TempDir> {
-        Ok(tempfile::Builder::new()
+    fn tmp_dir(&self, prefix: &str) -> Result<tempfile::TempDir, std::io::Error> {
+        tempfile::Builder::new()
             .prefix(prefix)
-            .tempdir_in(self.location())?)
+            .tempdir_in(self.location())
     }
 
     /// Looks up a single OSV record by its [`OsvRecordId`].
@@ -118,15 +119,16 @@ impl OsvDb {
     pub fn get_record(
         &self,
         id: &OsvRecordId,
-    ) -> anyhow::Result<Option<OsvRecord>> {
+    ) -> Result<Option<OsvRecord>, GetRecordErr> {
         let records_dir = self.records_dir();
         let mut record_path = records_dir.join(id);
         record_path.add_extension(OSV_RECORD_FILE_EXTENSION);
         if !record_path.exists() {
             return Ok(None);
         }
-        let osv_record_file = File::open(record_path)?;
-        let osv_record = serde_json::from_reader(&osv_record_file)?;
+        let osv_record_file = File::open(record_path).map_err(GetRecordErr::Io)?;
+        let osv_record =
+            serde_json::from_reader(&osv_record_file).map_err(GetRecordErr::Json)?;
         Ok(Some(osv_record))
     }
 
@@ -138,9 +140,13 @@ impl OsvDb {
     ///
     /// [`Stream`]: futures::Stream
     pub fn records_stream(
-        &self
-    ) -> anyhow::Result<impl futures::Stream<Item = anyhow::Result<OsvRecord>>> {
-        let records_dir_content = std::fs::read_dir(self.records_dir())?;
+        &self,
+    ) -> Result<
+        impl futures::Stream<Item = Result<OsvRecord, ReadRecordErr>>,
+        RecordsStreamErr,
+    > {
+        let records_dir_content = std::fs::read_dir(self.records_dir())
+            .map_err(RecordsStreamErr::ReadDir)?;
         let stream = futures::stream::iter(records_dir_content)
             .filter_map(|entry| {
                 async {
@@ -154,10 +160,13 @@ impl OsvDb {
             })
             .then(|entry| {
                 async move {
-                    let entry = entry?;
-                    let bytes = tokio::fs::read(entry.path()).await?;
-                    let osv_record = serde_json::from_slice(&bytes)?;
-                    anyhow::Ok(osv_record)
+                    let entry = entry.map_err(ReadRecordErr::Io)?;
+                    let bytes = tokio::fs::read(entry.path())
+                        .await
+                        .map_err(ReadRecordErr::Io)?;
+                    let osv_record =
+                        serde_json::from_slice(&bytes).map_err(ReadRecordErr::Json)?;
+                    Ok(osv_record)
                 }
             });
         Ok(stream.boxed())
@@ -174,8 +183,8 @@ impl OsvDb {
     pub async fn download_latest(
         &self,
         chunk_size: u64,
-    ) -> anyhow::Result<()> {
-        let tmp_dir = self.tmp_dir("osv-download")?;
+    ) -> Result<(), DownloadLatestErr> {
+        let tmp_dir = self.tmp_dir("osv-download").map_err(DownloadLatestErr::Io)?;
         let client = reqwest::Client::new();
 
         let new_last_modified =
@@ -183,14 +192,16 @@ impl OsvDb {
 
         let records_dir = self.records_dir();
         if records_dir.exists() {
-            std::fs::remove_dir_all(&records_dir)?;
+            std::fs::remove_dir_all(&records_dir).map_err(DownloadLatestErr::Io)?;
         }
         // Atomically replaces the current records directory with the newly downloaded one.
         // rename(2) is guaranteed to be atomic on POSIX systems — see
         // <https://man7.org/linux/man-pages/man2/rename.2.html>.
-        std::fs::rename(&tmp_dir, records_dir)?;
+        std::fs::rename(&tmp_dir, records_dir).map_err(DownloadLatestErr::Io)?;
 
-        let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
+        let new_last_modified_timestamp_nanos = new_last_modified
+            .timestamp_nanos_opt()
+            .ok_or(DownloadLatestErr::TimestampOutOfRange(new_last_modified))?;
         self.0
             .last_modified
             .store(new_last_modified_timestamp_nanos, Ordering::Release);
@@ -212,9 +223,9 @@ impl OsvDb {
     ///
     /// [`Stream`]: futures::Stream
     pub async fn sync(
-        &self
-    ) -> anyhow::Result<impl futures::Stream<Item = anyhow::Result<OsvRecord>>> {
-        let tmp_dir = self.tmp_dir("osv-sync")?;
+        &self,
+    ) -> Result<impl futures::Stream<Item = Result<OsvRecord, ReadRecordErr>>, SyncErr> {
+        let tmp_dir = self.tmp_dir("osv-sync").map_err(SyncErr::Io)?;
         let last_modified = self.last_modified();
 
         let client = reqwest::Client::new();
@@ -236,30 +247,33 @@ impl OsvDb {
                     &osv_record_url(entry.ecosystem, &entry.id),
                     &tmp_path.join(&record_filename),
                 )
-                .await?;
-                anyhow::Ok(())
+                .await
+                .map_err(SyncErr::Download)?;
+                Ok::<(), SyncErr>(())
             });
         }
         while let Some(res) = tasks.join_next().await {
-            res??;
+            res.map_err(SyncErr::Join)??;
         }
 
         let records_dir = self.records_dir();
         if !records_dir.exists() {
-            std::fs::create_dir(&records_dir)?;
+            std::fs::create_dir(&records_dir).map_err(SyncErr::Io)?;
         }
         let mut tasks = tokio::task::JoinSet::new();
-        for entry in std::fs::read_dir(tmp_dir.path())? {
+        for entry in std::fs::read_dir(tmp_dir.path()).map_err(SyncErr::Io)? {
             let records_dir = records_dir.clone();
             tasks.spawn(async move {
-                let entry = entry?;
+                let entry = entry.map_err(SyncErr::Io)?;
                 let dest = records_dir.join(entry.file_name());
 
                 // Atomically replaces the current records directory with the newly
                 // downloaded one. rename(2) is guaranteed
                 // to be atomic on POSIX systems — see <https://man7.org/linux/man-pages/man2/rename.2.html>.
-                tokio::fs::rename(entry.path(), &dest).await?;
-                anyhow::Ok(dest)
+                tokio::fs::rename(entry.path(), &dest)
+                    .await
+                    .map_err(SyncErr::Io)?;
+                Ok::<PathBuf, SyncErr>(dest)
             });
         }
         // resolve error right now, before modifying `last_modified` field
@@ -269,16 +283,21 @@ impl OsvDb {
             .into_iter()
             .collect::<Result<_, _>>()?;
 
-        let new_last_modified_timestamp_nanos = new_last_modified.timestamp_nanos_opt().context(format!("The date must be between 1677-09-21T00:12:43.145224192 and and 2262-04-11T23:47:16.854775807, provided: {new_last_modified}"))?;
+        let new_last_modified_timestamp_nanos = new_last_modified
+            .timestamp_nanos_opt()
+            .ok_or(SyncErr::TimestampOutOfRange(new_last_modified))?;
         self.0
             .last_modified
             .store(new_last_modified_timestamp_nanos, Ordering::Release);
 
         let stream = futures::stream::iter(new_record_paths).then(|path| {
             async move {
-                let bytes = tokio::fs::read(&path).await?;
-                let osv_record = serde_json::from_slice(&bytes)?;
-                anyhow::Ok(osv_record)
+                let bytes = tokio::fs::read(&path)
+                    .await
+                    .map_err(ReadRecordErr::Io)?;
+                let osv_record =
+                    serde_json::from_slice(&bytes).map_err(ReadRecordErr::Json)?;
+                Ok::<OsvRecord, ReadRecordErr>(osv_record)
             }
         });
 
@@ -301,7 +320,7 @@ async fn download_latest_archives(
     ecosystems: &OsvGsEcosystems,
     path: impl AsRef<Path>,
     chunk_size: u64,
-) -> anyhow::Result<DateTime<Utc>> {
+) -> Result<DateTime<Utc>, DownloadLatestErr> {
     if ecosystems.is_all() {
         download_archive_for_ecosystem(client, None, &path, chunk_size).await
     } else {
@@ -318,7 +337,7 @@ async fn download_latest_archives(
             .await
             .into_iter()
             .try_fold(DateTime::<Utc>::MIN_UTC, |last_modified, new_modified| {
-                anyhow::Ok(last_modified.max(new_modified?))
+                Ok(last_modified.max(new_modified?))
             })
     }
 }
@@ -331,14 +350,20 @@ async fn download_archive_for_ecosystem(
     ecosystem: Option<OsvGsEcosystem>,
     path: impl AsRef<Path>,
     chunk_size: u64,
-) -> anyhow::Result<DateTime<Utc>> {
+) -> Result<DateTime<Utc>, DownloadLatestErr> {
     download_and_extract_osv_archive(client, ecosystem, &path, chunk_size).await?;
-    let mut csv_rdr = download_osv_modified_csv(client, ecosystem).await?;
+    let mut csv_rdr = download_osv_modified_csv(client, ecosystem)
+        .await
+        .map_err(DownloadLatestErr::Download)?;
     let first_record = csv_rdr
         .records()
         .next()
-        .context("OSV modified csv file must have at least one entry")?;
-    let entry = OsvModifiedRecord::try_from_csv_record(&first_record?, ecosystem)?;
+        .ok_or(DownloadLatestErr::EmptyModifiedCsv)?;
+    let entry = OsvModifiedRecord::try_from_csv_record(
+        &first_record.map_err(DownloadLatestErr::Csv)?,
+        ecosystem,
+    )
+    .map_err(DownloadLatestErr::ParseRecord)?;
     Ok(entry.modified)
 }
 
@@ -353,7 +378,7 @@ async fn collect_modified_entries(
     client: &reqwest::Client,
     ecosystems: &OsvGsEcosystems,
     since: DateTime<Utc>,
-) -> anyhow::Result<(DateTime<Utc>, Vec<OsvModifiedRecord>)> {
+) -> Result<(DateTime<Utc>, Vec<OsvModifiedRecord>), SyncErr> {
     if ecosystems.is_all() {
         collect_entries_from_csv(client, None, since).await
     } else {
@@ -367,7 +392,7 @@ async fn collect_modified_entries(
             |(last_modified, mut entries), res| {
                 let (new_modified, new_entries) = res?;
                 entries.extend(new_entries);
-                anyhow::Ok((last_modified.max(new_modified), entries))
+                Ok((last_modified.max(new_modified), entries))
             },
         )
     }
@@ -383,12 +408,18 @@ async fn collect_entries_from_csv(
     client: &reqwest::Client,
     ecosystem: Option<OsvGsEcosystem>,
     since: DateTime<Utc>,
-) -> anyhow::Result<(DateTime<Utc>, Vec<OsvModifiedRecord>)> {
+) -> Result<(DateTime<Utc>, Vec<OsvModifiedRecord>), SyncErr> {
     let mut new_last_modified = since;
     let mut entries = Vec::new();
-    let mut csv_rdr = download_osv_modified_csv(client, ecosystem).await?;
+    let mut csv_rdr = download_osv_modified_csv(client, ecosystem)
+        .await
+        .map_err(SyncErr::Download)?;
     for result in csv_rdr.records() {
-        let entry = OsvModifiedRecord::try_from_csv_record(&result?, ecosystem)?;
+        let entry = OsvModifiedRecord::try_from_csv_record(
+            &result.map_err(SyncErr::Csv)?,
+            ecosystem,
+        )
+        .map_err(SyncErr::ParseRecord)?;
         if entry.modified <= since {
             break;
         }
@@ -405,30 +436,37 @@ async fn download_and_extract_osv_archive(
     ecosystem: Option<OsvGsEcosystem>,
     path: impl AsRef<Path>,
     chunk_size: u64,
-) -> anyhow::Result<()> {
-    let temp_zip_archive_dir = tempdir_in(&path)?;
+) -> Result<(), DownloadLatestErr> {
+    let temp_zip_archive_dir =
+        tempdir_in(&path).map_err(DownloadLatestErr::Io)?;
     let archive = chuncked_download_to(
         client,
         &osv_archive_url(ecosystem),
         chunk_size,
         temp_zip_archive_dir.path().join("osv.zip"),
     )
-    .await?;
-    let mut zip_archive = zip::ZipArchive::new(archive)?;
-    zip_archive.extract(&path)?;
+    .await
+    .map_err(DownloadLatestErr::Download)?;
+    let mut zip_archive =
+        zip::ZipArchive::new(archive).map_err(DownloadLatestErr::Zip)?;
+    zip_archive
+        .extract(&path)
+        .map_err(DownloadLatestErr::Zip)?;
     Ok(())
 }
 
 async fn download_osv_modified_csv(
     client: &reqwest::Client,
     ecosystem: Option<OsvGsEcosystem>,
-) -> anyhow::Result<csv::Reader<Cursor<Bytes>>> {
+) -> Result<csv::Reader<Cursor<Bytes>>, DownloaderErr> {
     let csv_bytes = client
         .get(osv_modified_id_csv_url(ecosystem))
         .send()
-        .await?
+        .await
+        .map_err(DownloaderErr::Http)?
         .bytes()
-        .await?;
+        .await
+        .map_err(DownloaderErr::Http)?;
 
     Ok(csv::ReaderBuilder::new()
         .has_headers(false)
