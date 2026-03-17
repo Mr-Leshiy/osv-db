@@ -1,7 +1,8 @@
 //! OSV google storage URLs
 
-use std::collections::HashSet;
+use std::{collections::HashSet, fmt::Display};
 
+use itertools::Itertools;
 use strum::{Display, EnumString};
 
 const OSV_STORAGE_URL: &str = "https://storage.googleapis.com/osv-vulnerabilities";
@@ -119,6 +120,19 @@ pub enum OsvGsEcosystem {
     OpenSUSE,
 }
 
+impl Display for OsvGsEcosystems {
+    fn fmt(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+    ) -> std::fmt::Result {
+        if self.is_all() {
+            write!(f, "all")
+        } else {
+            write!(f, "[{}]", self.iter().join(","))
+        }
+    }
+}
+
 impl OsvGsEcosystems {
     /// Creates an empty ecosystem set, meaning **all** ecosystems are targeted.
     #[must_use]
@@ -173,4 +187,31 @@ pub fn osv_record_url(
     record_path: &str,
 ) -> String {
     format!("{OSV_STORAGE_URL}/{ecosystem}/{record_path}.json")
+}
+
+#[cfg(test)]
+mod tests {
+    use test_case::test_case;
+
+    use super::*;
+
+    #[test_case(
+        OsvGsEcosystems::all()
+        => "all"
+    )]
+    #[test_case(
+        OsvGsEcosystems::all()
+        .add(OsvGsEcosystem::Go)
+        => "[Go]"
+    )]
+    #[test_case(
+        OsvGsEcosystems::all()
+        .add(OsvGsEcosystem::Go)
+        .add(OsvGsEcosystem::Npm)
+        => "[Go,npm]"
+    )]
+    #[allow(clippy::needless_pass_by_value)]
+    fn osv_gs_ecosystems_display(v: OsvGsEcosystems) -> String {
+        v.to_string()
+    }
 }
