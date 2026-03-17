@@ -145,8 +145,13 @@ impl OsvDb {
         &self
     ) -> Result<impl futures::Stream<Item = Result<OsvRecord, ReadRecordErr>>, RecordsStreamErr>
     {
+        let records_dir = self.records_dir();
+        if !records_dir.exists() {
+            return Ok(futures::stream::iter(std::iter::empty()).boxed());
+        }
+
         let records_dir_content =
-            std::fs::read_dir(self.records_dir()).map_err(RecordsStreamErr::ReadDir)?;
+            std::fs::read_dir(records_dir).map_err(RecordsStreamErr::ReadDir)?;
         let stream = futures::stream::iter(records_dir_content)
             .filter_map(|entry| {
                 async {
