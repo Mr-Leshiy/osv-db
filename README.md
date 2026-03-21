@@ -36,8 +36,9 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // Sync only new/updated records since last download
-    let mut stream = db.sync().await.unwrap();
-    while let Some(record) = stream.try_next().await? {
+    let records_iter = db.sync().await?;
+    for record in records_iter {
+        let record = record?;
         println!("Updated: {}", record.id);
     }
 

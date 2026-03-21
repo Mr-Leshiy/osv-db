@@ -33,7 +33,7 @@ pub enum GetRecordErr {
     Json(#[source] serde_json::Error),
 }
 
-/// Error returned by `OsvDb::records_stream`.
+/// Error returned by `OsvDb::records`.
 #[derive(Debug, Error)]
 pub enum RecordsStreamErr {
     /// Failed to open the records directory for reading.
@@ -41,7 +41,7 @@ pub enum RecordsStreamErr {
     ReadDir(#[source] std::io::Error),
 }
 
-/// Error yielded by individual stream items from `OsvDb::records_stream` and
+/// Error yielded by individual iterator items from `OsvDb::records` and
 /// `OsvDb::sync`.
 #[derive(Debug, Error)]
 pub enum ReadRecordErr {

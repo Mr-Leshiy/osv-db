@@ -17,7 +17,6 @@ use std::{
 
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
-use futures::StreamExt;
 use tempfile::tempdir_in;
 
 pub use crate::osv_gs::{OsvGsEcosystem, OsvGsEcosystems};
@@ -134,46 +133,38 @@ impl OsvDb {
         Ok(Some(osv_record))
     }
 
-    /// Returns an async [`Stream`] over every [`OsvRecord`] stored in the database.
+    /// Returns an [`Iterator`] over every [`OsvRecord`] stored in the database.
     ///
-    /// Files are read and parsed asynchronously using [`tokio::fs`]. Each
-    /// record is yielded as `Ok(`[`OsvRecord`]`)`. I/O or parse failures
-    /// yield an [`Err`] item without terminating the stream.
-    ///
-    /// [`Stream`]: futures::Stream
-    pub fn records_stream(
+    /// Files are read and parsed synchronously. Each record is yielded as
+    /// `Ok(`[`OsvRecord`]`)`. I/O or parse failures yield an [`Err`] item
+    /// without terminating the iterator.
+    pub fn records(
         &self
-    ) -> Result<impl futures::Stream<Item = Result<OsvRecord, ReadRecordErr>>, RecordsStreamErr>
-    {
+    ) -> Result<impl Iterator<Item = Result<OsvRecord, ReadRecordErr>>, RecordsStreamErr> {
         let records_dir = self.records_dir();
         if !records_dir.exists() {
-            return Ok(futures::stream::iter(std::iter::empty()).boxed());
+            let empty: Box<dyn Iterator<Item = Result<OsvRecord, ReadRecordErr>>> =
+                Box::new(std::iter::empty());
+            return Ok(empty);
         }
 
         let records_dir_content =
             std::fs::read_dir(records_dir).map_err(RecordsStreamErr::ReadDir)?;
-        let stream = futures::stream::iter(records_dir_content)
-            .filter_map(|entry| {
-                async {
-                    Some(entry).filter(|e| {
-                        e.as_ref().is_ok_and(|e| {
-                            e.path().extension().and_then(|e| e.to_str())
-                                == Some(OSV_RECORD_FILE_EXTENSION)
-                        })
+        Ok(Box::new(
+            records_dir_content
+                .filter(|entry| {
+                    entry.as_ref().is_ok_and(|e| {
+                        e.path().extension().and_then(|ext| ext.to_str())
+                            == Some(OSV_RECORD_FILE_EXTENSION)
                     })
-                }
-            })
-            .then(|entry| {
-                async move {
+                })
+                .map(|entry| {
                     let entry = entry.map_err(ReadRecordErr::Io)?;
-                    let bytes = tokio::fs::read(entry.path())
-                        .await
-                        .map_err(ReadRecordErr::Io)?;
+                    let bytes = std::fs::read(entry.path()).map_err(ReadRecordErr::Io)?;
                     let osv_record = serde_json::from_slice(&bytes).map_err(ReadRecordErr::Json)?;
                     Ok(osv_record)
-                }
-            });
-        Ok(stream.boxed())
+                }),
+        ))
     }
 
     /// Downloads a full, latest OSV database for all configured ecosystems.
@@ -225,12 +216,10 @@ impl OsvDb {
     /// encountered, avoiding a full re-download. After all new records are saved,
     /// [`Self::last_modified`] is updated to the highest timestamp seen.
     ///
-    /// Returns an async [`Stream`] that yields each newly added or updated [`OsvRecord`].
-    ///
-    /// [`Stream`]: futures::Stream
+    /// Returns an [`Iterator`] that yields each newly added or updated [`OsvRecord`].
     pub async fn sync(
         &self
-    ) -> Result<impl futures::Stream<Item = Result<OsvRecord, ReadRecordErr>>, SyncErr> {
+    ) -> Result<impl Iterator<Item = Result<OsvRecord, ReadRecordErr>>, SyncErr> {
         let tmp_dir = self.tmp_dir("osv-sync").map_err(SyncErr::Io)?;
         let last_modified = self.last_modified();
 
@@ -296,15 +285,11 @@ impl OsvDb {
             .last_modified
             .store(new_last_modified_timestamp_nanos, Ordering::Release);
 
-        let stream = futures::stream::iter(new_record_paths).then(|path| {
-            async move {
-                let bytes = tokio::fs::read(&path).await.map_err(ReadRecordErr::Io)?;
-                let osv_record = serde_json::from_slice(&bytes).map_err(ReadRecordErr::Json)?;
-                Ok::<OsvRecord, ReadRecordErr>(osv_record)
-            }
-        });
-
-        Ok(stream.boxed())
+        Ok(new_record_paths.into_iter().map(|path| {
+            let bytes = std::fs::read(&path).map_err(ReadRecordErr::Io)?;
+            let osv_record = serde_json::from_slice(&bytes).map_err(ReadRecordErr::Json)?;
+            Ok::<OsvRecord, ReadRecordErr>(osv_record)
+        }))
     }
 }
 
@@ -474,7 +459,6 @@ async fn download_osv_modified_csv(
 mod tests {
     use std::{collections::HashSet, sync::atomic::Ordering};
 
-    use futures::StreamExt;
     use tempfile::TempDir;
 
     use super::*;
@@ -510,13 +494,8 @@ mod tests {
             assert_eq!(&record.id, record_id);
         }
 
-        // verify records_stream yields all records including our target
-        let ids: HashSet<OsvRecordId> = osv
-            .records_stream()
-            .unwrap()
-            .map(|r| r.unwrap().id)
-            .collect()
-            .await;
+        // verify records yields all records including our target
+        let ids: HashSet<OsvRecordId> = osv.records().unwrap().map(|r| r.unwrap().id).collect();
 
         for record_id in &record_ids {
             assert!(ids.contains(record_id));
@@ -555,13 +534,7 @@ mod tests {
             Ordering::Release,
         );
 
-        let sync_records: Vec<OsvRecord> = osv
-            .sync()
-            .await
-            .unwrap()
-            .map(|r| r.unwrap())
-            .collect()
-            .await;
+        let sync_records: Vec<OsvRecord> = osv.sync().await.unwrap().map(|r| r.unwrap()).collect();
 
         // RUSTSEC-2026-0032 must be present after sync.
         assert!(
@@ -569,17 +542,12 @@ mod tests {
             "RUSTSEC-2026-0032 should exist after sync"
         );
 
-        let stream_ids: HashSet<String> = osv
-            .records_stream()
-            .unwrap()
-            .map(|r| r.unwrap().id)
-            .collect()
-            .await;
+        let stream_ids: HashSet<String> = osv.records().unwrap().map(|r| r.unwrap().id).collect();
 
         for sync_record in &sync_records {
             assert!(
                 stream_ids.contains(&sync_record.id),
-                "sync record {} is missing from records_stream",
+                "sync record {} is missing from records",
                 sync_record.id
             );
             assert!(
