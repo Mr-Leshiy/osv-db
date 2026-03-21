@@ -23,7 +23,7 @@ pub use crate::osv_gs::{OsvGsEcosystem, OsvGsEcosystems};
 use crate::{
     downloader::{chuncked_download_to, simple_download_to},
     errors::{
-        ClearErr, DownloadLatestErr, DownloaderErr, GetRecordErr, OsvDbNewErr, ReadRecordErr,
+        DownloadLatestErr, DownloaderErr, GetRecordErr, OsvDbNewErr, ReadRecordErr,
         RecordsStreamErr, SyncErr,
     },
     osv_gs::{osv_archive_url, osv_modified_id_csv_url, osv_record_url},

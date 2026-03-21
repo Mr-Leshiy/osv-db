@@ -20,14 +20,6 @@ pub enum OsvDbNewErr {
     Io(#[source] std::io::Error),
 }
 
-/// Error returned by `OsvDb::clear`.
-#[derive(Debug, Error)]
-pub enum ClearErr {
-    /// A file-system I/O operation failed.
-    #[error("I/O error: {0}")]
-    Io(#[source] std::io::Error),
-}
-
 /// Error returned by `OsvDb::get_record`.
 #[derive(Debug, Error)]
 pub enum GetRecordErr {
