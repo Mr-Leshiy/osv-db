@@ -23,8 +23,8 @@ pub use crate::osv_gs::{OsvGsEcosystem, OsvGsEcosystems};
 use crate::{
     downloader::{chuncked_download_to, simple_download_to},
     errors::{
-        DownloadLatestErr, DownloaderErr, GetRecordErr, OsvDbNewErr, ReadRecordErr,
-        RecordsStreamErr, SyncErr,
+        DownloadLatestErr, DownloaderErr, GetRecordErr, OsvDbNewErr, ReadRecordErr, RecordsIterErr,
+        SyncErr,
     },
     osv_gs::{osv_archive_url, osv_modified_id_csv_url, osv_record_url},
     types::{OsvModifiedRecord, OsvRecord, OsvRecordId},
@@ -137,17 +137,18 @@ impl OsvDb {
     /// without terminating the iterator.
     pub fn records(
         &self
-    ) -> Result<impl Iterator<Item = Result<OsvRecord, ReadRecordErr>>, RecordsStreamErr> {
+    ) -> Result<impl Iterator<Item = Result<OsvRecord, ReadRecordErr>> + Send, RecordsIterErr> {
         let records_dir = self.records_dir();
         if !records_dir.exists() {
-            let empty: Box<dyn Iterator<Item = Result<OsvRecord, ReadRecordErr>>> =
+            let empty: Box<dyn Iterator<Item = Result<OsvRecord, ReadRecordErr>> + Send> =
                 Box::new(std::iter::empty());
             return Ok(empty);
         }
 
         let records_dir_content =
-            std::fs::read_dir(records_dir).map_err(RecordsStreamErr::ReadDir)?;
-        Ok(Box::new(
+            std::fs::read_dir(records_dir).map_err(RecordsIterErr::ReadDir)?;
+
+        let iter: Box<dyn Iterator<Item = Result<OsvRecord, ReadRecordErr>> + Send> = Box::new(
             records_dir_content
                 .filter(|entry| {
                     entry.as_ref().is_ok_and(|e| {
@@ -161,7 +162,8 @@ impl OsvDb {
                     let osv_record = serde_json::from_slice(&bytes).map_err(ReadRecordErr::Json)?;
                     Ok(osv_record)
                 }),
-        ))
+        );
+        Ok(iter)
     }
 
     /// Downloads a full, latest OSV database for all configured ecosystems.
@@ -216,7 +218,7 @@ impl OsvDb {
     /// Returns an [`Iterator`] that yields each newly added or updated [`OsvRecord`].
     pub async fn sync(
         &self
-    ) -> Result<impl Iterator<Item = Result<OsvRecord, ReadRecordErr>>, SyncErr> {
+    ) -> Result<impl Iterator<Item = Result<OsvRecord, ReadRecordErr>> + Send, SyncErr> {
         let tmp_dir = self.tmp_dir("osv-sync").map_err(SyncErr::Io)?;
         let last_modified = self.last_modified();
 
