@@ -23,7 +23,7 @@ pub use crate::osv_gs::{OsvGsEcosystem, OsvGsEcosystems};
 use crate::{
     downloader::{chuncked_download_to, simple_download_to},
     errors::{
-        DownloadLatestErr, DownloaderErr, GetRecordErr, OsvDbNewErr, ReadRecordErr,
+        ClearErr, DownloadLatestErr, DownloaderErr, GetRecordErr, OsvDbNewErr, ReadRecordErr,
         RecordsStreamErr, SyncErr,
     },
     osv_gs::{osv_archive_url, osv_modified_id_csv_url, osv_record_url},
@@ -55,18 +55,15 @@ impl OsvDb {
     /// Pass [`OsvGsEcosystems::all`] to cover all ecosystems, or build a specific set
     /// with [`OsvGsEcosystems::add`].
     ///
-    /// # Errors
+    /// If `path` does not exist it is created (including all parent directories).
     ///
-    /// Returns an error if `path` does not point to an existing directory.
+    /// # Errors
+    /// - [`OsvDbNewErr`]
     pub fn new(
         ecosystems: OsvGsEcosystems,
         path: impl AsRef<Path>,
     ) -> Result<Self, OsvDbNewErr> {
-        if !path.as_ref().is_dir() {
-            return Err(OsvDbNewErr {
-                path: path.as_ref().to_path_buf(),
-            });
-        }
+        std::fs::create_dir_all(&path).map_err(OsvDbNewErr::Io)?;
         Ok(Self(Arc::new(OsvDbInner {
             location: path.as_ref().to_path_buf(),
             ecosystems,

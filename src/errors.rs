@@ -1,5 +1,3 @@
-use std::path::PathBuf;
-
 use chrono::{DateTime, Utc};
 use thiserror::Error;
 
@@ -16,10 +14,18 @@ pub enum DownloaderErr {
 
 /// Error returned by `OsvDb::new`.
 #[derive(Debug, Error)]
-#[error("provided path `{path}` must be an existing directory")]
-pub struct OsvDbNewErr {
-    /// The path that was rejected.
-    pub path: PathBuf,
+pub enum OsvDbNewErr {
+    /// Failed to create or access the database directory.
+    #[error("failed to create or access the database directory: {0}")]
+    Io(#[source] std::io::Error),
+}
+
+/// Error returned by `OsvDb::clear`.
+#[derive(Debug, Error)]
+pub enum ClearErr {
+    /// A file-system I/O operation failed.
+    #[error("I/O error: {0}")]
+    Io(#[source] std::io::Error),
 }
 
 /// Error returned by `OsvDb::get_record`.
