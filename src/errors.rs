@@ -33,7 +33,7 @@ pub enum GetRecordErr {
 
 /// Error returned by `OsvDb::records`.
 #[derive(Debug, Error)]
-pub enum RecordsStreamErr {
+pub enum RecordsIterErr {
     /// Failed to open the records directory for reading.
     #[error("failed to read the records directory: {0}")]
     ReadDir(#[source] std::io::Error),
