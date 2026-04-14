@@ -8,7 +8,7 @@ use super::OsvRecord;
 #[test_case("RUSTSEC-2025-0112.json")]
 #[tokio::test]
 async fn json_serde_roundtrip(path: &str) {
-    const VERSION: &str = "/v1.7.5";
+    const VERSION: &str = "v1.7.5";
 
     let record_file = std::fs::File::open(format!("src/types/tests/{path}")).unwrap();
     let record: OsvRecord = serde_json::from_reader(record_file).unwrap();
