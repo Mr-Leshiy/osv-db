@@ -157,9 +157,13 @@ impl<'de> Deserialize<'de> for EcosystemWithSuffix {
 }
 
 impl Serialize for EcosystemWithSuffix {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-        where
-            S: serde::Serializer {
+    fn serialize<S>(
+        &self,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
         self.to_string().serialize(serializer)
     }
 }
