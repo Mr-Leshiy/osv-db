@@ -1,7 +1,7 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// An external reference for the vulnerability.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Reference {
     /// Classification of this reference.
     #[serde(rename = "type")]
@@ -11,7 +11,7 @@ pub struct Reference {
 }
 
 /// Classification of an external [`Reference`].
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum ReferenceType {
     /// A published security advisory.
     ADVISORY,

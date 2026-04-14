@@ -1,20 +1,20 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A credit entry for a person or organization.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Credit {
     /// Name of the credited person or organization.
     pub name: String,
     /// Contact URIs or handles for the credited party.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub contact: Vec<String>,
     /// The role this party played.
-    #[serde(rename = "type")]
+    #[serde(rename = "type", skip_serializing_if = "Option::is_none")]
     pub credit_type: Option<CreditType>,
 }
 
 /// The role a credited party played in discovering or fixing the vulnerability.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum CreditType {
     /// Discovered the vulnerability.
     FINDER,

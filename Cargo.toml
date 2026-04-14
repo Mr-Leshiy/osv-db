@@ -1,6 +1,6 @@
 [package]
 name = "osv-db"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2024"
 authors = [
     "Oleksii Pozhylenkov (Mr-Leshiy) <leshiy12345678@gmail.com>"
@@ -64,3 +64,4 @@ itertools = "0.14.0"
 [dev-dependencies]
 anyhow = "1.0.102"
 test-case = "3.3.1"
+jsonschema = { version = "0.46.0", default-features = false }

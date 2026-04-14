@@ -1,7 +1,7 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// A severity rating expressed in a specific scoring system.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Severity {
     /// The scoring system used.
     #[serde(rename = "type")]
@@ -11,7 +11,7 @@ pub struct Severity {
 }
 
 /// Supported vulnerability severity scoring systems.
-#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize, Serialize)]
 pub enum SeverityType {
     /// Common Vulnerability Scoring System v2.
     #[serde(rename = "CVSS_V2")]
