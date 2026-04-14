@@ -6,6 +6,8 @@ mod package;
 mod range;
 mod reference;
 mod severity;
+#[cfg(test)]
+mod tests;
 
 pub use affected::Affected;
 use chrono::{DateTime, Utc};

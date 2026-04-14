@@ -64,3 +64,4 @@ itertools = "0.14.0"
 [dev-dependencies]
 anyhow = "1.0.102"
 test-case = "3.3.1"
+jsonschema = { version = "0.46.0", default-features = false }
