@@ -1,6 +1,6 @@
 use std::{fmt::Display, str::FromStr};
 
-use serde::{Deserialize, Deserializer, de};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use strum::{Display, EnumString};
 
 /// Ecosystem name, optionally with a suffix (e.g. `"Debian:10"`).
@@ -153,6 +153,14 @@ impl<'de> Deserialize<'de> for EcosystemWithSuffix {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let s = String::deserialize(deserializer)?;
         s.parse().map_err(|_| de::Error::unknown_variant(&s, &[]))
+    }
+}
+
+impl Serialize for EcosystemWithSuffix {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+        where
+            S: serde::Serializer {
+        self.to_string().serialize(serializer)
     }
 }
 
