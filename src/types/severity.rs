@@ -6,7 +6,7 @@ pub struct Severity {
     /// The scoring system used.
     #[serde(rename = "type")]
     pub severity_type: SeverityType,
-    /// Score string whose format is defined by [`SeverityType`].
+    /// Score string whose format is defined by [`crate::types::SeverityType`].
     pub score: String,
 }
 

@@ -12,7 +12,7 @@ pub enum DownloaderErr {
     Io(#[source] std::io::Error),
 }
 
-/// Error returned by `OsvDb::new`.
+/// Error returned by [`crate::OsvDb::new`].
 #[derive(Debug, Error)]
 pub enum OsvDbNewErr {
     /// Failed to create or access the database directory.
@@ -20,7 +20,7 @@ pub enum OsvDbNewErr {
     Io(#[source] std::io::Error),
 }
 
-/// Error returned by `OsvDb::get_record`.
+/// Error returned by [`crate::OsvDb::get_record`].
 #[derive(Debug, Error)]
 pub enum GetRecordErr {
     /// Provided [`crate::OsvRecordId`] has invalid format
@@ -34,7 +34,7 @@ pub enum GetRecordErr {
     Json(#[source] serde_json::Error),
 }
 
-/// Error returned by `OsvDb::records`.
+/// Error returned by [`crate::OsvDb::records`].
 #[derive(Debug, Error)]
 pub enum RecordsIterErr {
     /// Failed to open the records directory for reading.
@@ -42,8 +42,8 @@ pub enum RecordsIterErr {
     ReadDir(#[source] std::io::Error),
 }
 
-/// Error yielded by individual iterator items from `OsvDb::records` and
-/// `OsvDb::sync`.
+/// Error yielded by individual iterator items from [`crate::OsvDb::records`] and
+/// [`crate::OsvDb::sync`].
 #[derive(Debug, Error)]
 pub enum ReadRecordErr {
     /// Failed to read the record file from disk.
@@ -54,7 +54,7 @@ pub enum ReadRecordErr {
     Json(#[source] serde_json::Error),
 }
 
-/// Error returned by `OsvModifiedRecord::try_from_csv_record`.
+/// Error returned by [`crate::types::OsvModifiedRecord::try_from_csv_record`].
 #[derive(Debug, Error)]
 pub enum ParseModifiedRecordErr {
     /// The CSV row did not have exactly 2 columns.
@@ -77,7 +77,7 @@ pub enum ParseModifiedRecordErr {
     InvalidPathFormat(String),
 }
 
-/// Error returned by `OsvDb::download_latest`.
+/// Error returned by [`crate::OsvDb::download_latest`].
 #[derive(Debug, Error)]
 pub enum DownloadLatestErr {
     /// A file-system I/O operation failed.
@@ -103,7 +103,7 @@ pub enum DownloadLatestErr {
     TimestampOutOfRange(DateTime<Utc>),
 }
 
-/// Error returned by `OsvDb::sync`.
+/// Error returned by [`crate::OsvDb::sync`].
 #[derive(Debug, Error)]
 pub enum SyncErr {
     /// A file-system I/O operation failed.

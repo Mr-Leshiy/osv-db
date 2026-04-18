@@ -57,7 +57,7 @@ pub struct OsvRecord {
     pub details: Option<String>,
     /// Severity ratings at the root level.
     ///
-    /// When present, per-package severity in [`Affected`] must be `null`.
+    /// When present, per-package severity in [`crate::types::Affected`] must be `null`.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub severity: Vec<Severity>,
     /// Packages and version ranges affected by this vulnerability.
