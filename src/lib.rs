@@ -44,16 +44,16 @@ struct OsvDbInner {
     ecosystems: OsvGsEcosystems,
     /// The most recent `modified` timestamp seen across all records, stored as
     /// nanoseconds since the Unix epoch. Updated atomically after each
-    /// [`crate::OsvDb::download_latest`] or [`crate::OsvDb::sync`] call. Defaults to `0` (Unix
-    /// epoch) until the database is populated.
+    /// [`crate::OsvDb::download_latest`] or [`crate::OsvDb::sync`] call. Defaults to `0`
+    /// (Unix epoch) until the database is populated.
     last_modified: AtomicI64,
 }
 
 impl OsvDb {
     /// Creates a new [`crate::OsvDb`] rooted at `path` targeting the given `ecosystems`.
     ///
-    /// Pass [`crate::OsvGsEcosystems::all`] to cover all ecosystems, or build a specific set
-    /// with [`crate::OsvGsEcosystems::add`].
+    /// Pass [`crate::OsvGsEcosystems::all`] to cover all ecosystems, or build a specific
+    /// set with [`crate::OsvGsEcosystems::add`].
     ///
     /// If `path` does not exist it is created (including all parent directories).
     ///
@@ -79,7 +79,8 @@ impl OsvDb {
 
     /// Returns the set of ecosystems this database targets.
     ///
-    /// An empty set (i.e. [`crate::OsvGsEcosystems::is_all`] is `true`) means all ecosystems.
+    /// An empty set (i.e. [`crate::OsvGsEcosystems::is_all`] is `true`) means all
+    /// ecosystems.
     #[must_use]
     pub fn ecosystems(&self) -> &OsvGsEcosystems {
         &self.0.ecosystems
@@ -146,7 +147,8 @@ impl OsvDb {
         Ok(Some(osv_record))
     }
 
-    /// Returns an [`Iterator`] over every [`crate::types::OsvRecord`] stored in the database.
+    /// Returns an [`Iterator`] over every [`crate::types::OsvRecord`] stored in the
+    /// database.
     ///
     /// Files are read and parsed synchronously. Each record is yielded as
     /// `Ok(`[`crate::types::OsvRecord`]`)`. I/O or parse failures yield an [`Err`] item
@@ -430,8 +432,8 @@ async fn collect_entries_from_csv(
     Ok((new_last_modified, entries))
 }
 
-/// Downloads the OSV archive for the given [`crate::OsvGsEcosystem`] (or all ecosystems if
-/// [`None`]) from <https://storage.googleapis.com/osv-vulnerabilities> and extracts it into `path`.
+/// Downloads the OSV archive for the given [`crate::OsvGsEcosystem`] (or all ecosystems
+/// if [`None`]) from <https://storage.googleapis.com/osv-vulnerabilities> and extracts it into `path`.
 async fn download_and_extract_osv_archive(
     client: &reqwest::Client,
     ecosystem: Option<OsvGsEcosystem>,
