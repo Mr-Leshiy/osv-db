@@ -119,9 +119,25 @@ impl OsvDb {
         &self,
         id: &OsvRecordId,
     ) -> Result<Option<OsvRecord>, GetRecordErr> {
-        let records_dir = self.records_dir();
-        let mut record_path = records_dir.join(id);
-        record_path.add_extension(OSV_RECORD_FILE_EXTENSION);
+        let record_file_path = PathBuf::from(id);
+        // Verify that the provided `record_file_name` is just a file name e.g.
+        // 'GHSA-vp9c-fpxx-744v.json' The path MUST have only one component, which is a
+        // file name
+        let mut record_file_path_components = record_file_path.components();
+        if !matches!(
+            record_file_path_components.next(),
+            Some(std::path::Component::Normal(component)) if component == id.as_str(),
+        ) {
+            return Err(GetRecordErr::InvalidIdFormat);
+        }
+        if record_file_path_components.next().is_none() {
+            return Err(GetRecordErr::InvalidIdFormat);
+        }
+
+        let record_path = self
+            .records_dir()
+            .join(record_file_path)
+            .with_added_extension(OSV_RECORD_FILE_EXTENSION);
         if !record_path.exists() {
             return Ok(None);
         }
