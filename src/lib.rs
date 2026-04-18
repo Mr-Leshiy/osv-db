@@ -130,7 +130,7 @@ impl OsvDb {
         ) {
             return Err(GetRecordErr::InvalidIdFormat);
         }
-        if record_file_path_components.next().is_none() {
+        if record_file_path_components.next().is_some() {
             return Err(GetRecordErr::InvalidIdFormat);
         }
 
