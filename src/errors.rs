@@ -23,7 +23,7 @@ pub enum OsvDbNewErr {
 /// Error returned by `OsvDb::get_record`.
 #[derive(Debug, Error)]
 pub enum GetRecordErr {
-    /// Provided [`OsvRecordId`] has invalid format
+    /// Provided [`crate::OsvRecordId`] has invalid format
     #[error("invalid record id format")]
     InvalidIdFormat,
     /// Failed to open or read the record file.
